@@ -1,0 +1,36 @@
+jobs:
+  extract_data:
+    command: "echo extract_data && exit 0"
+    depends_on: []
+    tags: ["etl", "daily"]
+    priority: 5
+    timeout: 120
+    retry:
+      max_attempts: 3
+      backoff_base: 2.0
+      jitter: true
+      retry_on_exit_codes: [1, 2]
+
+  transform_data:
+    command: "echo transform_data && exit 0"
+    depends_on: ["extract_data"]
+    tags: ["etl"]
+    priority: 5
+    timeout: 60
+    retry:
+      max_attempts: 2
+      backoff_base: 1.5
+      jitter: true
+      retry_on_exit_codes: [1]
+
+  load_data:
+    command: "echo load_data && exit 0"
+    depends_on: ["transform_data"]
+    tags: ["etl"]
+    priority: 5
+    timeout: 60
+    retry:
+      max_attempts: 2
+      backoff_base: 1.5
+      jitter: true
+      retry_on_exit_codes: [1]

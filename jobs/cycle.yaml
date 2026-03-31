@@ -1,0 +1,7 @@
+jobs:
+  job_a:
+    command: "echo Hello from A"
+    depends_on: ["job_b"]
+  job_b:
+    command: "echo Hello from B"
+    depends_on: ["job_a"]

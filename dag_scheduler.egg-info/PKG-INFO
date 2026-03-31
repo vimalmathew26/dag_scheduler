@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: dag_scheduler
+Version: 0.1.0
+Summary: A complete DAG task scheduler daemon with subprocess execution and hot-reloadable job definitions.
+Author-email: Genie <genie@ubuntu.local>
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: fastapi
+Requires-Dist: uvicorn[standard]
+Requires-Dist: click
+Requires-Dist: aiosqlite
+Requires-Dist: pyyaml
+Requires-Dist: watchdog
+Requires-Dist: pydantic>=2.0.0
+Requires-Dist: pytest-asyncio
+Requires-Dist: httpx

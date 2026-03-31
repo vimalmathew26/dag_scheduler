@@ -1,0 +1,9 @@
+fastapi
+uvicorn[standard]
+click
+aiosqlite
+pyyaml
+watchdog
+pydantic>=2.0.0
+pytest-asyncio
+httpx

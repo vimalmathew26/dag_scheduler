@@ -1,0 +1,2 @@
+[console_scripts]
+dag-scheduler = dag_scheduler.__main__:main

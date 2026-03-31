@@ -1,0 +1,25 @@
+[jobs.cleanup_logs]
+command = "echo cleanup_logs && exit 0"
+depends_on = ["load_data"]
+tags = ["maintenance"]
+priority = 1
+timeout = 30
+
+[jobs.cleanup_logs.retry]
+max_attempts = 1
+backoff_base = 1.0
+jitter = false
+retry_on_exit_codes = [1]
+
+[jobs.archive_old]
+command = "echo archive_old && exit 0"
+depends_on = ["cleanup_logs"]
+tags = ["maintenance"]
+priority = 1
+timeout = 30
+
+[jobs.archive_old.retry]
+max_attempts = 1
+backoff_base = 1.0
+jitter = false
+retry_on_exit_codes = [1]

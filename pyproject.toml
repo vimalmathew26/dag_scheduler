@@ -1,0 +1,31 @@
+[project]
+name = "dag_scheduler"
+version = "0.1.0"
+description = "A complete DAG task scheduler daemon with subprocess execution and hot-reloadable job definitions."
+authors = [{name = "Genie", email = "genie@ubuntu.local"}]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "click",
+    "aiosqlite",
+    "pyyaml",
+    "watchdog",
+    "pydantic>=2.0.0",
+    "pytest-asyncio",
+    "httpx",
+]
+
+[project.scripts]
+dag-scheduler = "dag_scheduler.__main__:main"
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["dag_scheduler"]
+
+[tool.setuptools.package-dir]
+dag_scheduler = "."

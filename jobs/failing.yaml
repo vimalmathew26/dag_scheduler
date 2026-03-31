@@ -1,0 +1,12 @@
+jobs:
+  always_fails:
+    command: "exit 1"
+    depends_on: []
+    tags: ["test"]
+    priority: 1
+    timeout: 10
+    retry:
+      max_attempts: 3
+      backoff_base: 1.0
+      jitter: false
+      retry_on_exit_codes: [1]

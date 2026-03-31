@@ -1,0 +1,7 @@
+jobs:
+  slow_job:
+    command: "sleep 30"
+    depends_on: []
+    tags: ["test"]
+    priority: 1
+    timeout: 2
