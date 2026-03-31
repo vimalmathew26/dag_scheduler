@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dag-scheduler = "dag_scheduler.__main__:main"
+dag-scheduler = "dag_scheduler.cli:cli"
 
 [build-system]
 requires = ["setuptools", "wheel"]
