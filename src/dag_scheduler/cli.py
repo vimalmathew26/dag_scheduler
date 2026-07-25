@@ -16,6 +16,18 @@ def cli():
     pass
 
 @cli.command()
+@click.option('--jobs-dir', type=click.Path(), default=None,
+              help='Directory to read job definitions from.')
+def daemon(jobs_dir):
+    """Run the scheduler daemon in the foreground."""
+    from .__main__ import main as run_daemon
+    if jobs_dir:
+        import os
+        os.environ['DAG_SCHEDULER_JOBS_DIR'] = str(Path(jobs_dir).resolve())
+    run_daemon()
+
+
+@cli.command()
 @click.argument('path', type=click.Path(exists=True))
 def load(path):
     """Load/reload a definition file"""

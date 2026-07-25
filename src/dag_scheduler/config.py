@@ -13,10 +13,14 @@ from pathlib import Path
 from typing import Optional
 
 # Paths
-BASE_DIR = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'genie_dag'
+BASE_DIR = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'dag_scheduler'
 
 DB_PATH = BASE_DIR / 'scheduler.db'
-JOBS_DIR = Path(__file__).parent / 'jobs'
+# Job definitions belong to the operator, not to the installed package.
+# This used to resolve inside the package directory, so after a pip install
+# `dag-scheduler load` wrote user files into site-packages and pip uninstall
+# deleted them.
+JOBS_DIR = Path(os.environ.get('DAG_SCHEDULER_JOBS_DIR', Path.cwd() / 'jobs'))
 
 # Execution settings
 MAX_CONCURRENT = 4
