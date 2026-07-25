@@ -224,6 +224,40 @@ pgrep -c -x sleep
 The job is correctly marked `timed_out` while its process keeps running,
 and outlives the daemon.
 
+### AFTER
+
+```
+### job state (expect timed_out)
+('timed_out',)
+### orphaned 'sleep 30' processes alive 8s after a 2s timeout
+0
+### detail
+### still alive after the daemon exits
+0
+```
+
+### Fix
+
+Two things were wrong, and only the first was in the audit.
+
+The timeout was enforced by wrapping `_execute_shell` in `wait_for`, so a
+timeout cancelled that coroutine and ran its `finally`, deregistering the
+process. `_handle_timeout` then looked the process up and got None, making
+the whole SIGTERM/SIGKILL block unreachable. The timeout is now enforced
+inside `_execute_shell`, where the process handle is in scope, and returns
+`(exit_code, timed_out)` rather than relying on an exception.
+
+The second is that killing the direct child is not enough. A job runs under
+a shell, so `sleep 30` is a grandchild; the before-capture shows both
+`/bin/sh -c sleep 30` and `sleep 30` surviving. Jobs are now spawned with
+`start_new_session=True` and signalled as a process group, so the whole job
+dies rather than just its shell. `ProcessManager.terminate` owns that
+escalation and is shared with the cancel path.
+
+The test measures process group membership read from /proc rather than
+matching command lines, because the surrounding harness has the job's
+command text in its own argv and a `pgrep -f` check gave a false positive.
+
 ---
 
 ## B4: cancelling a running job raises uncaught exceptions

@@ -348,6 +348,21 @@ class Persistence:
             await db.commit()
             return True
 
+    async def get_runs_for_job(self, job_name: str) -> List[Dict[str, Any]]:
+        """All runs for a job, newest first."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT run_id, job_name, state, start_time, end_time,
+                       exit_code, attempt
+                FROM job_runs WHERE job_name = ?
+                ORDER BY start_time DESC, rowid DESC
+                """,
+                (job_name,)
+            ) as cursor:
+                return [dict(row) for row in await cursor.fetchall()]
+
     async def record_run(self, run):
         """Record a new job run in the database."""
         async with aiosqlite.connect(self.db_path) as db:

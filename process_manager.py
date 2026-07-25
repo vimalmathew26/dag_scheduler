@@ -2,6 +2,8 @@
 
 import asyncio
 import logging
+import os
+import signal
 from typing import Dict, Optional, Set
 from .models import JobState
 from .config import GRACEFUL_KILL_TIMEOUT
@@ -59,6 +61,50 @@ class ProcessManager:
         
         logger.info(f"Crash recovery completed. Marked {len(unknown_jobs)} jobs as unknown.")
 
+    async def terminate(self, process: asyncio.subprocess.Process) -> Optional[int]:
+        """Kill a job: SIGTERM the process group, then SIGKILL if needed.
+
+        A job command runs under a shell, so the direct child is usually
+        `/bin/sh -c ...` and the real work is a grandchild.  Signalling only
+        the child leaves the grandchild orphaned, which is what timed-out
+        jobs used to do.  Processes are spawned in their own session so the
+        whole group can be signalled at once.
+
+        Returns the process return code, or None if it could not be reaped.
+        """
+        if process.returncode is not None:
+            return process.returncode
+
+        self._signal_group(process, signal.SIGTERM)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=GRACEFUL_KILL_TIMEOUT)
+            return process.returncode
+        except asyncio.TimeoutError:
+            logger.warning(
+                f"Process {process.pid} ignored SIGTERM after "
+                f"{GRACEFUL_KILL_TIMEOUT}s; sending SIGKILL"
+            )
+
+        self._signal_group(process, signal.SIGKILL)
+        try:
+            await asyncio.wait_for(process.wait(), timeout=GRACEFUL_KILL_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.error(f"Process {process.pid} survived SIGKILL")
+        return process.returncode
+
+    @staticmethod
+    def _signal_group(process: asyncio.subprocess.Process, sig: int) -> None:
+        """Signal the process group, falling back to the direct child."""
+        try:
+            os.killpg(os.getpgid(process.pid), sig)
+            return
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        try:
+            process.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
+
     async def kill_by_job_name(self, job_name: str) -> bool:
         """Gracefully terminate (SIGTERM then SIGKILL) the process for a job.
 
@@ -74,15 +120,8 @@ class ProcessManager:
 
         # Kill outside lock to avoid holding it during I/O
         try:
-            process.terminate()
-            try:
-                await asyncio.wait_for(process.wait(), timeout=GRACEFUL_KILL_TIMEOUT)
-            except asyncio.TimeoutError:
-                process.kill()
-                await process.wait()
+            await self.terminate(process)
             return True
-        except ProcessLookupError:
-            return False
         except Exception as e:
             logger.error(f"Error killing process for job '{job_name}': {e}")
             return False

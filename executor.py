@@ -69,12 +69,23 @@ class Executor:
             logger.info(f"Starting job {job_name} (run_id: {run_id}, attempt: {attempt})")
             
             try:
-                # Use wait_for to enforce timeout
-                exit_code = await asyncio.wait_for(
-                    self._execute_shell(job_name, run_id, definition.command),
-                    timeout=definition.timeout
+                exit_code, timed_out = await self._execute_shell(
+                    job_name, run_id, definition.command, definition.timeout
                 )
-                
+
+                if timed_out:
+                    logger.warning(
+                        f"Job {job_name} (run_id: {run_id}) timed out after "
+                        f"{definition.timeout}s"
+                    )
+                    await self.persistence.finalize_run(
+                        run_id, JobState.TIMED_OUT, exit_code
+                    )
+                    await self.persistence.update_job_state(
+                        job_name, JobState.TIMED_OUT
+                    )
+                    return
+
                 final_state = JobState.DONE if exit_code == 0 else JobState.FAILED
                 end_time = await self.persistence.finalize_run(run_id, final_state, exit_code)
                 job_run.state = final_state
@@ -93,34 +104,55 @@ class Executor:
                     if self.retry_engine:
                         await self.retry_engine.handle_retry(definition, job_run, exit_code)
 
-            except asyncio.TimeoutError:
-                logger.warning(f"Job {job_name} (run_id: {run_id}) timed out after {definition.timeout}s")
-                await self._handle_timeout(job_run)
             except Exception as e:
                 logger.error(f"Unexpected error executing job {job_name}: {e}")
                 await self.persistence.finalize_run(run_id, JobState.FAILED, -1)
                 await self.persistence.update_job_state(job_name, JobState.FAILED)
 
-    async def _execute_shell(self, job_name: str, run_id: str, command: str) -> int:
-        """
-        Spawns the subprocess and streams logs.
+    async def _execute_shell(
+        self, job_name: str, run_id: str, command: str, timeout: float
+    ) -> Tuple[Optional[int], bool]:
+        """Spawn the job, stream its output, and enforce the timeout.
+
+        Returns (exit_code, timed_out).
+
+        The timeout is enforced here, where the process handle is in scope.
+        It used to be enforced by wrapping this coroutine in wait_for, which
+        cancelled it and ran its finally clause, deregistering the process
+        before the timeout handler could look it up.  The handler therefore
+        found nothing and the kill never happened.
+
+        start_new_session puts the job in its own process group so the whole
+        job, not just the shell, can be signalled.
         """
         process = await asyncio.create_subprocess_shell(
             command,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            start_new_session=True,
         )
-        
+
         await self.process_manager.register_process(job_name, run_id, process)
-        
+
         try:
-            # Stream stdout and stderr concurrently
-            await asyncio.gather(
+            streaming = asyncio.gather(
                 self._stream_log(run_id, 'stdout', process.stdout),
-                self._stream_log(run_id, 'stderr', process.stderr)
+                self._stream_log(run_id, 'stderr', process.stderr),
+                process.wait(),
             )
-            
-            return await process.wait()
+            try:
+                await asyncio.wait_for(asyncio.shield(streaming), timeout=timeout)
+            except asyncio.TimeoutError:
+                streaming.cancel()
+                try:
+                    await streaming
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+                exit_code = await self.process_manager.terminate(process)
+                return exit_code, True
+            return process.returncode, False
         finally:
             await self.process_manager.unregister_process(run_id)
 
@@ -136,23 +168,3 @@ class Executor:
             chunk = line.decode('utf-8', errors='replace')
             await self.log_store.store_log_chunk(run_id, stream_name, chunk)
 
-    async def _handle_timeout(self, job_run: JobRun):
-        """Handle a timed-out job with graceful SIGTERM then SIGKILL."""
-        process = await self.process_manager.get_process(job_run.run_id)
-        if process:
-            try:
-                # Graceful termination: SIGTERM first (#11)
-                process.terminate()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=GRACEFUL_KILL_TIMEOUT)
-                except asyncio.TimeoutError:
-                    # Force kill if SIGTERM didn't work
-                    process.kill()
-                    await process.wait()
-            except ProcessLookupError:
-                pass
-            except Exception:
-                pass
-                
-        await self.persistence.finalize_run(job_run.run_id, JobState.TIMED_OUT, -1)
-        await self.persistence.update_job_state(job_run.job_name, JobState.TIMED_OUT)
