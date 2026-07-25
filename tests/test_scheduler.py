@@ -278,3 +278,66 @@ class TestAgingLoop:
             ) as c:
                 priority = (await c.fetchone())[0]
         assert priority > 1, "aging should have incremented at least once"
+
+
+class TestBackgroundTaskFailures:
+    async def test_a_failing_dispatch_is_logged_by_the_app_logger(
+        self, persistence, caplog
+    ):
+        """Failures used to surface only via the asyncio logger, as
+        'Task exception was never retrieved', invisible to anyone filtering
+        on dag_scheduler.*"""
+
+        class ExplodingExecutor:
+            def at_capacity(self):
+                return False
+
+            async def run_job(self, name, definition, attempt=1):
+                raise RuntimeError("job blew up")
+
+        await seed(persistence, a=job())
+        await persistence.update_job_state("a", JobState.QUEUED)
+        sched = Scheduler(persistence, FakeRegistry({"a": job()}), ExplodingExecutor())
+
+        with caplog.at_level("ERROR", logger="dag_scheduler.scheduler"):
+            sched.running = True
+            task = asyncio.create_task(sched._main_loop())
+            await asyncio.sleep(0.4)
+            sched.running = False
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            await asyncio.sleep(0.1)
+
+        messages = [r.message for r in caplog.records]
+        assert any("job blew up" in m for m in messages), (
+            f"dispatch failure was not reported by the app logger: {messages}"
+        )
+
+    async def test_dispatch_tasks_are_held_until_done(self, persistence):
+        class SlowExecutor:
+            def at_capacity(self):
+                return False
+
+            async def run_job(self, name, definition, attempt=1):
+                await asyncio.sleep(0.3)
+
+        await seed(persistence, a=job())
+        await persistence.update_job_state("a", JobState.QUEUED)
+        sched = Scheduler(persistence, FakeRegistry({"a": job()}), SlowExecutor())
+
+        sched.running = True
+        task = asyncio.create_task(sched._main_loop())
+        await asyncio.sleep(0.15)
+        assert sched.dispatch_tasks(), "in-flight tasks must be tracked for shutdown"
+
+        sched.running = False
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        await asyncio.sleep(0.4)
+        assert not [t for t in sched.dispatch_tasks() if not t.done()]

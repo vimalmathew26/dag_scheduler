@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Set
 
 if TYPE_CHECKING:
     from .scheduler import Scheduler
@@ -16,6 +16,15 @@ class RetryEngine:
 
     def __init__(self, scheduler: 'Scheduler'):
         self.scheduler = scheduler
+        self._pending: Set[asyncio.Task] = set()
+
+    @staticmethod
+    def _report_failure(task: asyncio.Task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"Retry task failed: {exc!r}", exc_info=exc)
 
     def should_retry(self, job_definition: 'JobDefinition', job_run: 'JobRun', exit_code: int) -> bool:
         """
@@ -73,10 +82,14 @@ class RetryEngine:
             logger.info(f"Job '{job_run.job_name}' failed with exit code {exit_code}. "
                        f"Retrying in {backoff_time:.2f} seconds (attempt {job_run.attempt + 1}/{job_definition.retry.max_attempts}).")
 
-            # Schedule the retry after backoff
-            asyncio.create_task(self._retry_after_delay(
+            # Schedule the retry after backoff. The task is held and its
+            # failures reported, rather than being fire-and-forget.
+            task = asyncio.create_task(self._retry_after_delay(
                 job_run.job_name, backoff_time, attempt=job_run.attempt + 1
             ))
+            self._pending.add(task)
+            task.add_done_callback(self._pending.discard)
+            task.add_done_callback(self._report_failure)
         else:
             logger.info(f"Job '{job_run.job_name}' failed with exit code {exit_code}. "
                        f"Max retries ({job_definition.retry.max_attempts}) exceeded or exit code not in retry policy. Staying failed.")

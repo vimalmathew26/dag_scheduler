@@ -73,6 +73,15 @@ class FileWatcher:
         # Create new debounce task
         task = asyncio.create_task(self._debounce_reload(src_path))
         self._debounce_tasks[src_path] = task
+        task.add_done_callback(self._report_failure)
+
+    @staticmethod
+    def _report_failure(task) -> None:
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc is not None:
+            logger.error(f"Reload task failed: {exc!r}", exc_info=exc)
 
     async def _debounce_reload(self, file_path: Path):
         """Reload registry after debounce delay."""

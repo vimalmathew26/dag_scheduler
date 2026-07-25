@@ -8,6 +8,17 @@ from .dag import get_ready_jobs
 
 logger = logging.getLogger(__name__)
 
+
+def _report_task_failure(task: asyncio.Task) -> None:
+    """Log a background task's exception through the application logger."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            f"Background task {task.get_name()} failed: {exc!r}", exc_info=exc
+        )
+
 class Scheduler:
     def __init__(self, persistence, registry, executor):
         self.persistence = persistence
@@ -21,10 +32,17 @@ class Scheduler:
         self.busy_poll_interval = 0.05
 
     def _spawn(self, coro) -> asyncio.Task:
-        """Dispatch a job, holding a reference so it is not collected."""
+        """Dispatch a job, holding a reference and reporting failures.
+
+        A bare create_task keeps no reference, so the task can be garbage
+        collected mid-flight, and surfaces failures only as "Task exception
+        was never retrieved" from the asyncio logger. Anyone filtering on
+        the application's own loggers saw nothing at all.
+        """
         task = asyncio.create_task(coro)
         self._dispatch_tasks.add(task)
         task.add_done_callback(self._dispatch_tasks.discard)
+        task.add_done_callback(_report_task_failure)
         return task
 
     async def start(self):
