@@ -161,7 +161,11 @@ class Persistence:
             db.execute("SELECT current_attempt FROM jobs WHERE name = ?", (name,)) as cursor,
         ):
             row = await cursor.fetchone()
-            return int(row[0]) if row else 0 if row else 1
+            if row is None:
+                # A job with no row has never been dispatched, so the next
+                # dispatch of it is attempt 1.
+                return 1
+            return int(row[0])
 
     async def upsert_job(self, name: str, definition: JobDefinition) -> None:
         """Insert or update a job definition."""

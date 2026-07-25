@@ -84,3 +84,16 @@ class TestAttemptPersistence:
         await scheduler.enqueue_job("j", bypass_deps=True)
 
         assert await persistence.get_job_attempt("j") == 1
+
+    async def test_unknown_job_reports_attempt_one(self, persistence):
+        """The default has to be 1, not 0.
+
+        The dispatch path reads this before running a job, and
+        should_retry compares it against max_attempts. A 0 here would
+        silently buy every job one extra attempt.
+        """
+        assert await persistence.get_job_attempt("no_such_job") == 1
+
+    async def test_a_job_with_no_recorded_attempt_reports_one(self, persistence):
+        await persistence.upsert_job("j", JobDefinition(command="true"))
+        assert await persistence.get_job_attempt("j") == 1
