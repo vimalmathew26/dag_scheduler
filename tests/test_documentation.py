@@ -46,9 +46,7 @@ class TestStateDiagram:
                 continue
             documented.add((source, target))
 
-        actual = {
-            (f.value, t.value) for f, t in Persistence.VALID_TRANSITIONS
-        }
+        actual = {(f.value, t.value) for f, t in Persistence.VALID_TRANSITIONS}
 
         assert documented == actual, (
             f"only in README: {sorted(documented - actual)}; "
@@ -62,9 +60,7 @@ class TestStateDiagram:
 class TestDocumentedSurface:
     def test_every_state_is_listed(self, readme):
         for state in JobState:
-            assert f"`{state.value}`" in readme, (
-                f"{state.value} is not documented"
-            )
+            assert f"`{state.value}`" in readme, f"{state.value} is not documented"
 
     def test_state_count_claim_is_right(self, readme):
         match = re.search(r"a (\d+)-state enum", readme)
@@ -85,9 +81,7 @@ class TestDocumentedSurface:
                 if method in ("GET", "POST"):
                     real.add((method, route.path))
 
-        documented = set(
-            re.findall(r"^\| `(GET|POST)` \| `([^`]+)` \|", readme, re.M)
-        )
+        documented = set(re.findall(r"^\| `(GET|POST)` \| `([^`]+)` \|", readme, re.M))
         assert documented, "no API table found"
         missing = documented - real
         assert not missing, f"documented but not implemented: {sorted(missing)}"
@@ -114,10 +108,14 @@ class TestDocumentedSurface:
 
     def test_environment_variables_are_documented(self, readme):
         for variable in [
-            "DAG_SCHEDULER_JOBS_DIR", "DAG_SCHEDULER_DB",
-            "DAG_SCHEDULER_MAX_CONCURRENT", "DAG_SCHEDULER_HOST",
-            "DAG_SCHEDULER_PORT", "DAG_SCHEDULER_TOKEN",
-            "DAG_SCHEDULER_LOG_LEVEL", "DAG_SCHEDULER_LOG_JSON",
+            "DAG_SCHEDULER_JOBS_DIR",
+            "DAG_SCHEDULER_DB",
+            "DAG_SCHEDULER_MAX_CONCURRENT",
+            "DAG_SCHEDULER_HOST",
+            "DAG_SCHEDULER_PORT",
+            "DAG_SCHEDULER_TOKEN",
+            "DAG_SCHEDULER_LOG_LEVEL",
+            "DAG_SCHEDULER_LOG_JSON",
         ]:
             assert variable in readme, f"{variable} is undocumented"
 
@@ -129,9 +127,7 @@ class TestExampleDefinitionsMatchTheirDescription:
         jobs_dir = README.parent / "jobs"
         spec = yaml.safe_load((jobs_dir / "failing.yaml").read_text())
         policy = spec["jobs"]["always_fails"]["retry"]
-        assert policy["max_attempts"] == 3, (
-            "the README says always_fails retries exactly 3 times"
-        )
+        assert policy["max_attempts"] == 3, "the README says always_fails retries exactly 3 times"
         assert policy["jitter"] is False
 
     def test_slow_job_timeout_is_shorter_than_its_sleep(self):
@@ -147,8 +143,6 @@ class TestExampleDefinitionsMatchTheirDescription:
         from dag_scheduler.models import JobDefinition
 
         spec = load_file(README.parent / "jobs" / "cycle.yaml")
-        jobs = {
-            name: JobDefinition(**body) for name, body in spec["jobs"].items()
-        }
+        jobs = {name: JobDefinition(**body) for name, body in spec["jobs"].items()}
         with pytest.raises(CycleError):
             topological_sort(jobs)
