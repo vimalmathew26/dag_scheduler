@@ -48,9 +48,14 @@ class FileWatcher:
                 logger.error(f"Error processing file event: {e}")
 
     async def stop(self):
-        """Stop watching directories."""
+        """Stop watching directories.
+
+        observer.join() is a blocking thread join, so it runs in an executor
+        rather than stalling the event loop during shutdown.
+        """
         self._observer.stop()
-        self._observer.join()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, self._observer.join)
         logger.info("File watcher stopped")
 
     async def _handle_event(self, event):

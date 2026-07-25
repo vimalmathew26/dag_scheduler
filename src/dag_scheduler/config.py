@@ -39,6 +39,7 @@ DEFAULT_RETRY_ON_EXIT_CODES = [1]
 # Scheduler settings
 PRIORITY_AGING_INTERVAL = 60  # seconds
 GRACEFUL_KILL_TIMEOUT = 5  # seconds before SIGKILL after SIGTERM
+SHUTDOWN_TIMEOUT = 10  # seconds to wait for the API and in-flight jobs to drain
 
 
 def ensure_directories(

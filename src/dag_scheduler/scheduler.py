@@ -33,13 +33,27 @@ class Scheduler:
         self._aging_task = asyncio.create_task(self._aging_loop())
         logger.info("Scheduler started.")
 
+    def dispatch_tasks(self) -> List[asyncio.Task]:
+        """In-flight job tasks, so shutdown can wait for them to finalize."""
+        return list(self._dispatch_tasks)
+
     async def stop(self):
+        """Stop claiming work and wait for the loops to actually exit.
+
+        These tasks used to be cancelled without being awaited, so the
+        caller carried on while they were still unwinding.
+        """
         self.running = False
-        if self._loop_task:
-            self._loop_task.cancel()
-        if self._aging_task:
-            self._aging_task.cancel()
-        logger.info("Scheduler stopped.")
+        for task in (self._loop_task, self._aging_task):
+            if task is not None and not task.done():
+                task.cancel()
+        for task in (self._loop_task, self._aging_task):
+            if task is not None:
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        logger.info("Scheduler stopped")
 
     async def _main_loop(self):
         """Claim queued jobs one at a time and dispatch them.

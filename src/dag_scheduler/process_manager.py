@@ -117,6 +117,23 @@ class ProcessManager:
         except (ProcessLookupError, OSError):
             pass
 
+    async def terminate_all(self) -> int:
+        """Terminate every tracked process. Used on shutdown.
+
+        Returns how many were signalled.  Shutdown used to cancel the tasks
+        supervising these processes without touching the processes
+        themselves, so they outlived the daemon.
+        """
+        async with self._lock:
+            processes = list(self.processes.values())
+
+        for process in processes:
+            try:
+                await self.terminate(process)
+            except Exception as e:
+                logger.error(f"Error terminating process {process.pid}: {e}")
+        return len(processes)
+
     async def kill_by_job_name(self, job_name: str) -> bool:
         """Gracefully terminate (SIGTERM then SIGKILL) the process for a job.
 

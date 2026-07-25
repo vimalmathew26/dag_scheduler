@@ -3,7 +3,14 @@ import signal
 import logging
 import sys
 import uvicorn
-from .config import DB_PATH, API_PORT, API_HOST, JOBS_DIR, ensure_directories
+from .config import (
+    API_HOST,
+    API_PORT,
+    DB_PATH,
+    JOBS_DIR,
+    SHUTDOWN_TIMEOUT,
+    ensure_directories,
+)
 from .persistence import Persistence
 from .registry import Registry
 from .log_store import LogStore
@@ -43,25 +50,63 @@ class Daemon:
 
         self.file_watcher = FileWatcher(self.registry, self.jobs_dir)
 
-    async def shutdown(self, sig=None):
-        if sig:
-            logger.info(f"Received exit signal {sig.name}...")
-        self.stop_event.set()
+        self.api_server = None
+        self.api_task = None
+        self._shutting_down = False
 
-        logger.info("Stopping scheduler...")
+    async def shutdown(self, sig=None):
+        """Stop cleanly: drain the API, kill jobs, let writes finish.
+
+        The old sequence set a stop event and then cancelled every
+        outstanding task. That abandoned running subprocesses, which
+        outlived the daemon; it interrupted run_job between record_run and
+        finalize_run, corrupting run history on every clean stop the same
+        way a crash did; and it cancelled uvicorn rather than asking it to
+        exit, which printed a CancelledError traceback at ERROR level on
+        every single shutdown.
+        """
+        if self._shutting_down:
+            return
+        self._shutting_down = True
+
+        if sig:
+            logger.info(f"Received exit signal {sig.name}, shutting down")
+
+        # 1. Stop claiming new work, so nothing new starts while we drain.
+        logger.info("Stopping scheduler")
         await self.scheduler.stop()
 
-        logger.info("Stopping file watcher...")
+        # 2. Stop watching for definition changes.
+        logger.info("Stopping file watcher")
         await self.file_watcher.stop()
 
-        # API (uvicorn) shutdown is handled by the server task being cancelled
+        # 3. Ask the API to drain rather than cancelling it mid-request.
+        if self.api_server is not None:
+            logger.info("Draining API server")
+            self.api_server.should_exit = True
+            if self.api_task is not None:
+                try:
+                    await asyncio.wait_for(self.api_task, timeout=SHUTDOWN_TIMEOUT)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
+                    self.api_task.cancel()
 
-        tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-        [t.cancel() for t in tasks]
+        # 4. Terminate running jobs, then give their tasks a moment to
+        #    write their own final state. A job killed here exits non-zero
+        #    and is recorded, rather than vanishing mid-write.
+        killed = await self.process_manager.terminate_all()
+        if killed:
+            logger.info(f"Terminated {killed} running job process(es)")
 
-        logger.info(f"Cancelling {len(tasks)} outstanding tasks")
-        await asyncio.gather(*tasks, return_exceptions=True)
-        logger.info("Daemon shutdown complete.")
+        inflight = [t for t in self.scheduler.dispatch_tasks() if not t.done()]
+        if inflight:
+            logger.info(f"Waiting for {len(inflight)} in-flight job(s) to finalize")
+            done, pending = await asyncio.wait(inflight, timeout=SHUTDOWN_TIMEOUT)
+            for task in pending:
+                logger.warning("A job task did not finalize in time; cancelling")
+                task.cancel()
+
+        self.stop_event.set()
+        logger.info("Daemon shutdown complete")
 
     async def run(self):
         # 1. DB Setup
@@ -81,13 +126,16 @@ class Daemon:
         init_api(self.scheduler, self.registry, self.persistence, self.log_store, self.process_manager)
 
         # 5. Start Scheduler and File Watcher
-        scheduler_task = asyncio.create_task(self.scheduler.start())
-        watcher_task = asyncio.create_task(self.file_watcher.start())
+        await self.scheduler.start()
+        self.watcher_task = asyncio.create_task(self.file_watcher.start())
 
         # 6. Start API Server (Uvicorn)
         config = uvicorn.Config(app, host=API_HOST, port=API_PORT, log_level="info")
-        server = uvicorn.Server(config)
-        api_task = asyncio.create_task(server.serve())
+        self.api_server = uvicorn.Server(config)
+        # Uvicorn installs its own signal handlers by default, which would
+        # race ours. The daemon owns the shutdown sequence.
+        self.api_server.install_signal_handlers = lambda: None
+        self.api_task = asyncio.create_task(self.api_server.serve())
 
         logger.info(f"Daemon started (API: {API_HOST}:{API_PORT})")
 
