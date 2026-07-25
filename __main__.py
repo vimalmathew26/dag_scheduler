@@ -3,7 +3,7 @@ import signal
 import logging
 import sys
 import uvicorn
-from .config import DB_PATH, API_PORT, API_HOST, JOBS_DIR
+from .config import DB_PATH, API_PORT, API_HOST, JOBS_DIR, ensure_directories
 from .persistence import Persistence
 from .registry import Registry
 from .log_store import LogStore
@@ -23,12 +23,16 @@ logging.basicConfig(
 logger = logging.getLogger("dag_scheduler.main")
 
 class Daemon:
-    def __init__(self):
+    def __init__(self, db_path=None, jobs_dir=None):
+        self.db_path = db_path or DB_PATH
+        self.jobs_dir = jobs_dir or JOBS_DIR
+        ensure_directories(self.db_path, self.jobs_dir)
+
         self.stop_event = asyncio.Event()
-        self.persistence = Persistence(DB_PATH)
-        self.log_store = LogStore(DB_PATH)
+        self.persistence = Persistence(self.db_path)
+        self.log_store = LogStore(self.db_path)
         self.process_manager = ProcessManager(self.persistence)
-        self.registry = Registry(self.persistence)
+        self.registry = Registry(self.persistence, self.jobs_dir)
         
         # Executor initialized with placeholders, retry_engine linked later
         self.executor = Executor(self.persistence, self.process_manager, self.log_store)
@@ -37,7 +41,7 @@ class Daemon:
         self.executor.set_retry_engine(self.retry_engine)
         self.executor.set_scheduler(self.scheduler)
         
-        self.file_watcher = FileWatcher(self.registry)
+        self.file_watcher = FileWatcher(self.registry, self.jobs_dir)
         
     async def shutdown(self, sig=None):
         if sig:

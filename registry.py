@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Dict, Optional
 from .models import JobDefinition, JobState
 from .definition_parser import DefinitionParser
@@ -13,8 +14,9 @@ class Registry:
     diffing definitions, and transitioning removed jobs.
     """
 
-    def __init__(self, persistence):
+    def __init__(self, persistence, jobs_dir: Optional[Path] = None):
         self.persistence = persistence
+        self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else JOBS_DIR
         self.jobs: Dict[str, JobDefinition] = {}
         self._reload_lock = asyncio.Lock()
 
@@ -23,7 +25,7 @@ class Registry:
         async with self._reload_lock:
             parser = DefinitionParser()
             try:
-                new_jobs = parser.parse_directory(JOBS_DIR)
+                new_jobs = parser.parse_directory(self.jobs_dir)
                 self.jobs = new_jobs
                 for name, definition in new_jobs.items():
                     await self.persistence.upsert_job(name, definition)
@@ -43,7 +45,7 @@ class Registry:
             parser = DefinitionParser()
             try:
                 # parse_directory handles validation (two-pass, cycle, etc.)
-                new_jobs = parser.parse_directory(JOBS_DIR)
+                new_jobs = parser.parse_directory(self.jobs_dir)
             except Exception as e:
                 logger.error(f"Reload failed: {e}")
                 # Atomic swap: new snapshot only replaces old after clean validation.

@@ -9,8 +9,9 @@ from .config import JOBS_DIR
 logger = logging.getLogger(__name__)
 
 class FileWatcher:
-    def __init__(self, registry, debounce_delay: float = 0.5):
+    def __init__(self, registry, jobs_dir=None, debounce_delay: float = 0.5):
         self.registry = registry
+        self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else JOBS_DIR
         self.debounce_delay = debounce_delay
         self.event_queue: asyncio.Queue = asyncio.Queue()
         self._observer = Observer()
@@ -25,10 +26,10 @@ class FileWatcher:
         self._loop = asyncio.get_event_loop()
         
         # Watch the main jobs directory
-        if JOBS_DIR.exists():
-            self._observer.schedule(self._handler, str(JOBS_DIR), recursive=False)
-            self._watched_dirs.add(JOBS_DIR)
-            logger.info(f"Started watching {JOBS_DIR}")
+        if self.jobs_dir.exists():
+            self._observer.schedule(self._handler, str(self.jobs_dir), recursive=False)
+            self._watched_dirs.add(self.jobs_dir)
+            logger.info(f"Started watching {self.jobs_dir}")
         
         self._observer.start()
         logger.info("File watcher started")

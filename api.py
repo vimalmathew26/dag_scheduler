@@ -6,7 +6,6 @@ from fastapi import FastAPI, HTTPException, Query, Depends, Request
 import aiosqlite
 import json
 
-from .config import DB_PATH, API_PORT, API_HOST
 from .models import JobState
 
 logger = logging.getLogger(__name__)
@@ -23,6 +22,7 @@ def init_api(sched, reg, pers, logs, proc_mgr):
     app.state.persistence = pers
     app.state.log_store = logs
     app.state.process_manager = proc_mgr
+    app.state.db_path = pers.db_path
 
 
 def _get_scheduler(request: Request):
@@ -40,6 +40,14 @@ def _get_log_store(request: Request):
 def _get_process_manager(request: Request):
     return request.app.state.process_manager
 
+def _get_db_path(request: Request):
+    """The database this daemon instance was started against.
+
+    Routes used to open the module-global config.DB_PATH directly, which
+    made the API impossible to point at a test database.
+    """
+    return request.app.state.db_path
+
 
 @app.get("/")
 async def root():
@@ -55,11 +63,12 @@ async def health_check():
 @app.get("/jobs")
 async def list_jobs(
     state: Optional[JobState] = Query(None, description="Filter by job state"),
-    tag: Optional[str] = Query(None, description="Filter by tag")
+    tag: Optional[str] = Query(None, description="Filter by tag"),
+    db_path=Depends(_get_db_path),
 ) -> List[Dict[str, Any]]:
     """List all jobs with current state, filter by state and tag"""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             
             # Build query with optional filters
@@ -94,10 +103,13 @@ async def list_jobs(
 
 
 @app.get("/jobs/{job_id}")
-async def get_job_detail(job_id: str) -> Dict[str, Any]:
+async def get_job_detail(
+    job_id: str,
+    db_path=Depends(_get_db_path),
+) -> Dict[str, Any]:
     """Get single job detail + last run summary"""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             
             # Get job details
@@ -141,10 +153,13 @@ async def get_job_detail(job_id: str) -> Dict[str, Any]:
 
 
 @app.get("/jobs/{job_id}/runs")
-async def get_job_runs(job_id: str) -> List[Dict[str, Any]]:
+async def get_job_runs(
+    job_id: str,
+    db_path=Depends(_get_db_path),
+) -> List[Dict[str, Any]]:
     """Get run history for a job"""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             
             # Verify job exists
@@ -180,11 +195,12 @@ async def get_run_logs(
     job_id: str,
     run_id: str,
     logs=Depends(_get_log_store),
+    db_path=Depends(_get_db_path),
 ) -> List[Dict[str, Any]]:
     """Get stdout/stderr for a run"""
     try:
         # Verify run exists and belongs to job
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT run_id FROM job_runs WHERE run_id = ? AND job_name = ?", 
@@ -233,11 +249,12 @@ async def cancel_job(
     job_id: str,
     pers=Depends(_get_persistence),
     proc_mgr=Depends(_get_process_manager),
+    db_path=Depends(_get_db_path),
 ) -> Dict[str, str]:
     """Cancel a queued or running job"""
     try:
         # Get current job state
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
                 "SELECT state FROM jobs WHERE name = ?", 
@@ -275,10 +292,10 @@ async def cancel_job(
 
 
 @app.get("/stats")
-async def get_statistics() -> Dict[str, Any]:
+async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
     """Get aggregate statistics"""
     try:
-        async with aiosqlite.connect(DB_PATH) as db:
+        async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             
             # Get total runs and pass rate
