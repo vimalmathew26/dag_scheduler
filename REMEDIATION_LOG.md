@@ -557,3 +557,154 @@ filtering and were not changed. Their question is "is there a cycle among
 these nodes", and a name with no node cannot close a loop, so skipping
 absent dependencies is correct for that purpose. Only the readiness
 predicate was wrong. Two tests pin this so the distinction is deliberate.
+
+---
+
+# Final verification
+
+From a clean `git clone` into a fresh virtualenv, installing with only the
+commands the README gives, on a machine state with no prior database.
+
+Environment caveat unchanged: CPython 3.10 with a `tomllib`/`tomli` shim,
+because no 3.11+ interpreter could be obtained. 3.11, 3.12 and 3.13 are
+covered by the CI matrix, which is the first place they are exercised.
+
+## 1. Install following only the README
+
+```bash
+git clone <repo> && cd dag_scheduler
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Succeeded. `dag-scheduler --help` lists all nine commands.
+
+## 2. Daemon starts, example definitions load
+
+```
+$ dag-scheduler daemon
+$ dag-scheduler status
+Job Status:
+  extract_data                   defined
+  transform_data                 defined
+  load_data                      defined
+  always_fails                   defined
+  cleanup_logs                   defined
+  archive_old                    defined
+  slow_job                       defined
+```
+
+Seven jobs. `cycle.yaml`'s two are rejected at load, as documented.
+
+## 3. Trigger extract_data once: exactly one run per job
+
+```
+('archive_old', 1)
+('cleanup_logs', 1)
+('extract_data', 1)
+('load_data', 1)
+('transform_data', 1)
+```
+
+Was 22 executions across the chain.
+
+## 4. always_fails: exactly three attempts with visible backoff
+
+```
+  425cd58f  attempt=3  state=failed  exit=1  start=2026-07-25 13:30:20
+  08d2ca5a  attempt=2  state=failed  exit=1  start=2026-07-25 13:30:18
+  8d30a4ad  attempt=1  state=failed  exit=1  start=2026-07-25 13:30:16
+('failed',)
+```
+
+Three runs, numbered, two seconds apart, then it stops. Was 47 and counting.
+
+## 5. slow_job: TIMED_OUT, no orphans
+
+```
+  slow_job                       timed_out
+orphaned sleep processes: 0
+```
+
+Was 4 processes surviving the daemon.
+
+## 6. Cancel a running job
+
+```
+job level:  ('cancelled',)
+run level:  ('cancelled', -15, 1)     # state, exit_code, end_time set
+orphans after cancel: 0
+```
+
+Real SIGTERM return code per DECISION 3, not the old invented -1, and the
+run says `cancelled` rather than `timed_out`.
+
+## 7. Duplicate name: both rejected, everything else survives
+
+```
+extract_data present?  (0,)
+unrelated jobs still here?
+('always_fails',) ('slow_job',) ('vchild',) ('vparent',)
+
+WARNING - Rejecting all 2 definitions of job 'extract_data': declared in
+multiple files (.../jobs/dup.yaml, .../jobs/etl.yaml). Remove the duplicate
+and the job will load.
+```
+
+Per DECISION 1. Was: the intruder's definition won and etl.yaml was
+discarded whole.
+
+## 8. Delete a dependency's definition file
+
+```
+before:  ('vchild', 'waiting')     ('vparent', 'defined')
+after:   ('vchild', 'blocked_unresolvable')
+child ever executed?  0
+job_runs for vchild:  (0,)
+```
+
+Per DECISION 2. Was: the dependent became instantly ready and ran.
+
+## 9. SIGKILL mid-run, restart
+
+```
+job state after restart:  ('unknown',)
+runs still dangling in 'running':  (0,)
+INFO - Crash recovery completed. Marked 1 jobs and 1 run(s) as unknown.
+```
+
+Was: job correct, 4 run rows stuck in `running` permanently.
+
+## 10. Clean SIGTERM with a job running
+
+```
+daemon exited: YES
+orphaned processes: 0
+dangling run rows: (0,)
+CancelledError tracebacks: 0
+unretrieved task exceptions: 0
+```
+
+All four were wrong before.
+
+## 11. Full test suite
+
+461 passed, 86% coverage.
+
+Weakest modules, and why: `file_watcher.py` 66% and `cli.py` 65% are
+dominated by watchdog's threaded callbacks and Click's output formatting,
+both of which are thin and churn-prone. `__main__.py` 61% is the uvicorn
+serve path, exercised by the CI smoke job rather than in-process. The
+modules carrying the logic are 92 to 100: persistence 98, definition_parser
+99, executor 96, dag 95, scheduler 92, metrics and models 100.
+
+## 12. Lint and type check
+
+```
+ruff check src tests        All checks passed!
+ruff format --check         43 files already formatted
+mypy                        Success: no issues found in 18 source files
+```
+
+mypy at `disallow_untyped_defs` and `check_untyped_defs`, configured in
+pyproject. Was 98 errors at that setting.

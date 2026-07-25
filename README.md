@@ -79,7 +79,7 @@ old database, either move it or let a new one be created.
 ### Running the tests
 
 ```bash
-pytest                       # 431 tests
+pytest                       # 461 tests
 ruff check . && mypy .
 ```
 
