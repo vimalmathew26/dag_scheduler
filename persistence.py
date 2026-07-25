@@ -113,7 +113,7 @@ class Persistence:
 
             if current_state == JobState.QUEUED:
                 # Validate and apply the transition within the same connection
-                await self.validate_transition(name, current_state, JobState.BLOCKED_UNRESOLVABLE)
+                self.validate_transition(name, current_state, JobState.BLOCKED_UNRESOLVABLE)
                 await db.execute(
                     "UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?",
                     (JobState.BLOCKED_UNRESOLVABLE.value, name)
@@ -139,11 +139,11 @@ class Persistence:
                 current_state = JobState(row[0])
             
             if current_state == state: return
-            await self.validate_transition(name, current_state, state)
+            self.validate_transition(name, current_state, state)
             await db.execute("UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?", (state.value, name))
             await db.commit()
 
-    async def validate_transition(self, job_name: str, from_state: JobState, to_state: JobState):
+    def validate_transition(self, job_name: str, from_state: JobState, to_state: JobState) -> None:
         if from_state == to_state: return
         if (from_state, to_state) not in self.VALID_TRANSITIONS:
             raise InvalidTransitionError(job_name, from_state, to_state)
@@ -229,7 +229,7 @@ class Persistence:
             if current_state not in terminal_states:
                 raise InvalidTransitionError(name, current_state, JobState.DEFINED)
 
-            await self.validate_transition(name, current_state, JobState.DEFINED)
+            self.validate_transition(name, current_state, JobState.DEFINED)
             await db.execute(
                 "UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?",
                 (JobState.DEFINED.value, name)

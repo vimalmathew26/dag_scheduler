@@ -36,7 +36,7 @@ class RetryEngine:
         # Check if exit code is in retry policy
         return exit_code in job_definition.retry.retry_on_exit_codes
     
-    async def calculate_backoff(self, job_definition: 'JobDefinition', attempt: int) -> float:
+    def calculate_backoff(self, job_definition: 'JobDefinition', attempt: int) -> float:
         """
         Calculate the backoff time with exponential backoff and optional jitter.
         
@@ -68,7 +68,7 @@ class RetryEngine:
         """
         if self.should_retry(job_definition, job_run, exit_code):
             # Calculate backoff time
-            backoff_time = await self.calculate_backoff(job_definition, job_run.attempt)
+            backoff_time = self.calculate_backoff(job_definition, job_run.attempt)
             
             logger.info(f"Job '{job_run.job_name}' failed with exit code {exit_code}. "
                        f"Retrying in {backoff_time:.2f} seconds (attempt {job_run.attempt + 1}/{job_definition.retry.max_attempts}).")
