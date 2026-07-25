@@ -121,17 +121,31 @@ def get_ready_jobs(completed_job: str, jobs: Dict[str, JobDefinition],
         
     Returns:
         List of job names that are now ready to run
+
+    A job is ready only when every name in its depends_on is present in
+    `jobs` and is DONE.  A dependency that is absent from the snapshot
+    blocks its dependent: Persistence.revalidate_jobs takes the same view
+    and moves such a job to BLOCKED_UNRESOLVABLE.
     """
     # Get direct dependents of the completed job
     dependents = get_dependents(completed_job, jobs)
-    
-    # Check which dependents are now ready
+
     ready_jobs = []
     for dep_name in dependents:
         job = jobs[dep_name]
-        # Check if all dependencies are done
-        if all(dep in current_states and current_states[dep] == JobState.DONE
-               for dep in job.depends_on if dep in jobs):
+        ready = True
+        for dep in job.depends_on:
+            if dep not in jobs:
+                # The dependency is not in the snapshot at all.  Its
+                # condition is unsatisfiable, not satisfied.  This used to
+                # be filtered out of the check, so a job whose only parent
+                # had been deleted became instantly ready and ran.
+                ready = False
+                break
+            if current_states.get(dep) is not JobState.DONE:
+                ready = False
+                break
+        if ready:
             ready_jobs.append(dep_name)
-    
+
     return ready_jobs

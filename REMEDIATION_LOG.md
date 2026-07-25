@@ -490,3 +490,70 @@ reproducible, and a test asserts two parses of the same directory agree.
 
 The warning names the job and every conflicting path, and says what to do
 about it.
+
+---
+
+## B7 / DECISION 2: a deleted dependency must block its dependent
+
+`dag.get_ready_jobs` filtered absent parents out of its readiness check
+(`dag.py:134`), so a job whose only parent had been deleted was treated as
+having no preconditions and became instantly ready.
+`Persistence.revalidate_jobs` took the opposite view of the same question.
+
+### Command
+
+```bash
+bash /tmp/repro/b7.sh
+```
+
+Creates `dep_parent.yaml` and `dep_child.yaml` where the child depends on
+the parent, puts the child in WAITING, then deletes the parent's file.
+
+### BEFORE
+
+`get_ready_jobs` returned the dependent as ready, and the dependent's row
+was deleted outright by `handle_removed_job` rather than reported as
+blocked. Covered by four unit tests that failed before the change:
+
+```
+FAILED test_job_whose_only_parent_vanished_is_not_ready
+FAILED test_one_present_done_parent_does_not_excuse_a_missing_one
+FAILED test_dag_and_revalidate_agree_a_missing_parent_blocks
+FAILED test_removed_dependency_leaves_the_dependent_blocked_not_deleted
+```
+
+### AFTER
+
+```
+### put dep_child in WAITING (its parent has not run)
+('dep_child', 'waiting')
+('dep_parent', 'defined')
+
+### now delete the parent's definition file
+### dependent must be blocked_unresolvable, not deleted, not run
+('dep_child', 'blocked_unresolvable')
+### did the child ever execute?
+0
+(0,)
+```
+
+### Fix
+
+`get_ready_jobs` now treats a dependency absent from the snapshot as
+unsatisfiable rather than satisfied, which is the same conclusion
+`revalidate_jobs` already reached. A job with no dependencies is still
+ready immediately; the two situations are no longer conflated.
+
+`handle_removed_job` moves a WAITING job to BLOCKED_UNRESOLVABLE instead of
+deleting it, so a dependent whose definition disappears is reported rather
+than erased. That required adding WAITING to BLOCKED_UNRESOLVABLE to the
+transition table, taking it from 20 legal transitions to 21, which the
+exhaustive matrix test asserts.
+
+### Cycle detection deliberately left alone
+
+`topological_sort` (`dag.py:32`) and `_find_cycle` (`dag.py:76`) do the same
+filtering and were not changed. Their question is "is there a cycle among
+these nodes", and a name with no node cannot close a loop, so skipping
+absent dependencies is correct for that purpose. Only the readiness
+predicate was wrong. Two tests pin this so the distinction is deliberate.

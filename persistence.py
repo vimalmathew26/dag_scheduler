@@ -26,6 +26,7 @@ class Persistence:
         (JobState.DEFINED, JobState.QUEUED),
         (JobState.DEFINED, JobState.WAITING),
         (JobState.WAITING, JobState.QUEUED),
+        (JobState.WAITING, JobState.BLOCKED_UNRESOLVABLE),
         (JobState.QUEUED, JobState.RUNNING),
         (JobState.RUNNING, JobState.DONE),
         (JobState.RUNNING, JobState.FAILED),
@@ -140,8 +141,13 @@ class Persistence:
                 if not row: return
                 current_state = JobState(row[0])
 
-            if current_state == JobState.QUEUED:
-                # Validate and apply the transition within the same connection
+            if current_state in (JobState.QUEUED, JobState.WAITING):
+                # A job that is queued or waiting is part of work in
+                # progress.  Its definition going away makes it
+                # unresolvable, which is a state worth reporting, so it is
+                # not silently deleted.  A WAITING job used to be erased,
+                # which meant deleting a definition file made its
+                # dependents vanish rather than show as blocked.
                 self.validate_transition(name, current_state, JobState.BLOCKED_UNRESOLVABLE)
                 await db.execute(
                     "UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?",

@@ -41,9 +41,9 @@ class TestExhaustiveMatrix:
         assert len(ALL_PAIRS) == 100
         same_state = [(a, b) for a, b in ALL_PAIRS if a == b]
         assert len(same_state) == 10
-        assert len(Persistence.VALID_TRANSITIONS) == 20
+        assert len(Persistence.VALID_TRANSITIONS) == 21
         illegal = len(ALL_PAIRS) - len(Persistence.VALID_TRANSITIONS) - len(same_state)
-        assert illegal == 70
+        assert illegal == 69
 
     @pytest.mark.parametrize("from_state,to_state", ALL_PAIRS)
     def test_membership_exactly_predicts_rejection(
@@ -89,6 +89,14 @@ class TestStateMachineProperties:
     @pytest.mark.parametrize("terminal", sorted(TERMINAL_STATES, key=lambda s: s.value))
     def test_every_terminal_state_can_reset_to_defined(self, terminal):
         assert (terminal, JobState.DEFINED) in Persistence.VALID_TRANSITIONS
+
+    def test_waiting_can_become_unresolvable(self):
+        """Added with DECISION 2: a waiting job whose dependency's
+        definition disappears is blocked rather than deleted."""
+        assert (
+            JobState.WAITING,
+            JobState.BLOCKED_UNRESOLVABLE,
+        ) in Persistence.VALID_TRANSITIONS
 
     def test_defined_is_never_a_terminal_dead_end(self):
         targets = {t for f, t in Persistence.VALID_TRANSITIONS if f is JobState.DEFINED}
