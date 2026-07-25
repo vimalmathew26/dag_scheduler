@@ -4,10 +4,16 @@ import time
 import uuid
 from typing import Optional, Tuple
 
-from .config import MAX_CONCURRENT, DEFAULT_TIMEOUT, GRACEFUL_KILL_TIMEOUT
+from .config import (
+    GRACEFUL_KILL_TIMEOUT,
+    LOG_BATCH_SIZE,
+    LOG_FLUSH_INTERVAL,
+    MAX_CONCURRENT,
+)
 from .models import JobState, JobDefinition, JobRun
 from .process_manager import ProcessManager
 from .log_store import LogStore
+from .logging_setup import for_run
 from .persistence import Persistence
 from .retry_engine import RetryEngine
 
@@ -55,13 +61,14 @@ class Executor:
             # The job may have been cancelled while this task waited for a
             # concurrency slot.  Nothing started, so nothing is recorded.
             if await self.persistence.get_job_state(job_name) is JobState.CANCELLED:
-                logger.info(
-                    f"Job {job_name} was cancelled before it started; not running"
+                for_run(logger, job_name, attempt=attempt).info(
+                    "Cancelled before it started; not running"
                 )
                 return
 
             run_id = str(uuid.uuid4())
             start_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            log = for_run(logger, job_name, run_id, attempt)
 
             job_run = JobRun(
                 job_name=job_name,
@@ -74,7 +81,7 @@ class Executor:
             # Record the run in DB via persistence
             await self.persistence.record_run(job_run)
 
-            logger.info(f"Starting job {job_name} (run_id: {run_id}, attempt: {attempt})")
+            log.info(f"Starting: {definition.command}")
 
             try:
                 exit_code, timed_out = await self._execute_shell(
@@ -85,17 +92,11 @@ class Executor:
                     await self.persistence.finalize_run(
                         run_id, JobState.CANCELLED, exit_code
                     )
-                    logger.info(
-                        f"Job {job_name} (run_id: {run_id}) cancelled with "
-                        f"exit code {exit_code}"
-                    )
+                    log.info(f"Cancelled, exit code {exit_code}")
                     return
 
                 if timed_out:
-                    logger.warning(
-                        f"Job {job_name} (run_id: {run_id}) timed out after "
-                        f"{definition.timeout}s"
-                    )
+                    log.warning(f"Timed out after {definition.timeout}s")
                     await self.persistence.finalize_run(
                         run_id, JobState.TIMED_OUT, exit_code
                     )
@@ -105,6 +106,7 @@ class Executor:
                     return
 
                 final_state = JobState.DONE if exit_code == 0 else JobState.FAILED
+                log.info(f"Finished {final_state.value}, exit code {exit_code}")
                 end_time = await self.persistence.finalize_run(run_id, final_state, exit_code)
                 job_run.state = final_state
                 job_run.end_time = end_time
@@ -123,7 +125,7 @@ class Executor:
                         await self.retry_engine.handle_retry(definition, job_run, exit_code)
 
             except Exception as e:
-                logger.error(f"Unexpected error executing job {job_name}: {e}")
+                log.error(f"Unexpected error: {e}", exc_info=True)
                 await self.persistence.finalize_run(run_id, JobState.FAILED, -1)
                 if not await self._was_cancelled(job_name):
                     await self.persistence.update_job_state(job_name, JobState.FAILED)
@@ -186,13 +188,37 @@ class Executor:
             await self.process_manager.unregister_process(run_id)
 
     async def _stream_log(self, run_id: str, stream_name: str, stream_reader: Optional[asyncio.StreamReader]):
+        """Read a stream to EOF, writing to the log store in batches.
+
+        Lines were written one at a time, each opening a connection and
+        committing.  They are batched by size and by age so a chatty job
+        does not do one transaction per line, while a slow job's output
+        still appears promptly.
+        """
         if not stream_reader:
             return
 
-        while True:
-            line = await stream_reader.readline()
-            if not line:
-                break
+        buffer = []
+        last_flush = time.monotonic()
 
-            chunk = line.decode('utf-8', errors='replace')
-            await self.log_store.store_log_chunk(run_id, stream_name, chunk)
+        async def flush():
+            nonlocal buffer, last_flush
+            if buffer:
+                await self.log_store.store_log_chunks(run_id, buffer)
+                buffer = []
+            last_flush = time.monotonic()
+
+        try:
+            while True:
+                line = await stream_reader.readline()
+                if not line:
+                    break
+
+                buffer.append((stream_name, line.decode('utf-8', errors='replace')))
+                if (
+                    len(buffer) >= LOG_BATCH_SIZE
+                    or time.monotonic() - last_flush >= LOG_FLUSH_INTERVAL
+                ):
+                    await flush()
+        finally:
+            await flush()

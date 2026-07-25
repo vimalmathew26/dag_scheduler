@@ -91,6 +91,23 @@ class Persistence:
                     FOREIGN KEY (job_run_id) REFERENCES job_runs(run_id)
                 )
             ''')
+
+            # Without these, /stats, every run history query and every log
+            # fetch is a full table scan.
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_runs_job_name "
+                "ON job_runs(job_name, start_time DESC)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_runs_state ON job_runs(state)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_job_logs_run_id "
+                "ON job_logs(job_run_id, id)"
+            )
+            await db.execute(
+                "CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state)"
+            )
             await db.commit()
 
     async def _migrate_add_current_attempt(self, db) -> None:

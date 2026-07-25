@@ -9,6 +9,8 @@ if TYPE_CHECKING:
     from .scheduler import Scheduler
     from .models import JobDefinition, JobRun
 
+from .logging_setup import for_run
+
 logger = logging.getLogger(__name__)
 
 class RetryEngine:
@@ -79,8 +81,11 @@ class RetryEngine:
             # Calculate backoff time
             backoff_time = self.calculate_backoff(job_definition, job_run.attempt)
 
-            logger.info(f"Job '{job_run.job_name}' failed with exit code {exit_code}. "
-                       f"Retrying in {backoff_time:.2f} seconds (attempt {job_run.attempt + 1}/{job_definition.retry.max_attempts}).")
+            for_run(logger, job_run.job_name, job_run.run_id, job_run.attempt).info(
+                f"Failed with exit code {exit_code}, retrying in "
+                f"{backoff_time:.2f}s as attempt "
+                f"{job_run.attempt + 1}/{job_definition.retry.max_attempts}"
+            )
 
             # Schedule the retry after backoff. The task is held and its
             # failures reported, rather than being fire-and-forget.
@@ -91,8 +96,12 @@ class RetryEngine:
             task.add_done_callback(self._pending.discard)
             task.add_done_callback(self._report_failure)
         else:
-            logger.info(f"Job '{job_run.job_name}' failed with exit code {exit_code}. "
-                       f"Max retries ({job_definition.retry.max_attempts}) exceeded or exit code not in retry policy. Staying failed.")
+            for_run(logger, job_run.job_name, job_run.run_id, job_run.attempt).info(
+                f"Failed with exit code {exit_code}, not retrying: "
+                f"attempt {job_run.attempt} of "
+                f"{job_definition.retry.max_attempts}, retry_on_exit_codes="
+                f"{job_definition.retry.retry_on_exit_codes}"
+            )
 
     async def _retry_after_delay(self, job_name: str, delay: float, attempt: int = 1):
         """

@@ -8,6 +8,8 @@ from .config import (
     API_PORT,
     DB_PATH,
     JOBS_DIR,
+    LOG_JSON,
+    LOG_LEVEL,
     SHUTDOWN_TIMEOUT,
     ensure_directories,
 )
@@ -20,13 +22,9 @@ from .scheduler import Scheduler
 from .file_watcher import FileWatcher
 from .retry_engine import RetryEngine
 from .api import app, init_api
+from .logging_setup import configure_logging
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(sys.stdout)]
-)
+configure_logging(LOG_LEVEL, json_output=LOG_JSON)
 logger = logging.getLogger("dag_scheduler.main")
 
 class Daemon:

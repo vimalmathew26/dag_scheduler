@@ -39,6 +39,12 @@ DEFAULT_RETRY_ON_EXIT_CODES = [1]
 # Scheduler settings
 PRIORITY_AGING_INTERVAL = 60  # seconds
 GRACEFUL_KILL_TIMEOUT = 5  # seconds before SIGKILL after SIGTERM
+LOG_BATCH_SIZE = 100  # log lines buffered before a write
+LOG_FLUSH_INTERVAL = 0.5  # seconds before a partial log buffer is written
+
+LOG_LEVEL = os.environ.get('DAG_SCHEDULER_LOG_LEVEL', 'INFO')
+LOG_JSON = os.environ.get('DAG_SCHEDULER_LOG_JSON', '').lower() in ('1', 'true', 'yes')
+
 SHUTDOWN_TIMEOUT = 10  # seconds to wait for the API and in-flight jobs to drain
 
 

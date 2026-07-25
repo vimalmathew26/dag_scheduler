@@ -39,6 +39,31 @@ class LogStore:
             logger.error(f"Failed to store log chunk for run {job_run_id}: {e}")
             raise
 
+    async def store_log_chunks(self, job_run_id: str, chunks: list) -> None:
+        """Store a batch of (stream, chunk) pairs in one transaction.
+
+        Log lines used to be written one at a time, each opening its own
+        connection and committing, so a job emitting 10000 lines opened
+        10000 connections.
+        """
+        if not chunks:
+            return
+        for stream, _ in chunks:
+            if stream not in ('stdout', 'stderr'):
+                raise ValueError(
+                    f"Invalid stream '{stream}'. Must be 'stdout' or 'stderr'."
+                )
+        try:
+            async with aiosqlite.connect(self.db_path) as db:
+                await db.executemany(
+                    "INSERT INTO job_logs (job_run_id, stream, chunk) VALUES (?, ?, ?)",
+                    [(job_run_id, stream, chunk) for stream, chunk in chunks],
+                )
+                await db.commit()
+        except Exception as e:
+            logger.error(f"Failed to store log chunks for run {job_run_id}: {e}")
+            raise
+
     async def get_logs(self, job_run_id: str) -> list:
         """
         Retrieve all logs for a job run.
@@ -57,7 +82,7 @@ class LogStore:
                     SELECT stream, chunk, timestamp
                     FROM job_logs
                     WHERE job_run_id = ?
-                    ORDER BY timestamp
+                    ORDER BY id
                     ''',
                     (job_run_id,)
                 ) as cursor:
@@ -101,7 +126,7 @@ class LogStore:
                     SELECT stream, chunk, timestamp
                     FROM job_logs
                     WHERE job_run_id = ?
-                    ORDER BY timestamp
+                    ORDER BY id
                     ''',
                     (run_id,)
                 ) as cursor:
