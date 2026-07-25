@@ -15,6 +15,12 @@ what happened: one process, one SQLite file, no broker.
 
 Requires Python 3.11 or newer, for `tomllib`.
 
+![A terminal session showing a dependency chain executing, a job retrying exactly three times with backoff, and a job being killed on timeout](docs/demo.gif)
+
+The run above is real output. A three-stage chain runs in dependency order,
+`always_fails` retries exactly three times and stops, and `slow_job` is
+killed when it exceeds its timeout with no orphaned process left behind.
+
 ---
 
 ## Install and run
