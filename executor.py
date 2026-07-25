@@ -52,6 +52,14 @@ class Executor:
         claims it atomically as part of selecting it.
         """
         async with self.semaphore:
+            # The job may have been cancelled while this task waited for a
+            # concurrency slot.  Nothing started, so nothing is recorded.
+            if await self.persistence.get_job_state(job_name) is JobState.CANCELLED:
+                logger.info(
+                    f"Job {job_name} was cancelled before it started; not running"
+                )
+                return
+
             run_id = str(uuid.uuid4())
             start_time = time.strftime('%Y-%m-%d %H:%M:%S')
 
@@ -72,6 +80,16 @@ class Executor:
                 exit_code, timed_out = await self._execute_shell(
                     job_name, run_id, definition.command, definition.timeout
                 )
+
+                if await self._was_cancelled(job_name):
+                    await self.persistence.finalize_run(
+                        run_id, JobState.CANCELLED, exit_code
+                    )
+                    logger.info(
+                        f"Job {job_name} (run_id: {run_id}) cancelled with "
+                        f"exit code {exit_code}"
+                    )
+                    return
 
                 if timed_out:
                     logger.warning(
@@ -107,7 +125,18 @@ class Executor:
             except Exception as e:
                 logger.error(f"Unexpected error executing job {job_name}: {e}")
                 await self.persistence.finalize_run(run_id, JobState.FAILED, -1)
-                await self.persistence.update_job_state(job_name, JobState.FAILED)
+                if not await self._was_cancelled(job_name):
+                    await self.persistence.update_job_state(job_name, JobState.FAILED)
+
+    async def _was_cancelled(self, job_name: str) -> bool:
+        """Whether the job was cancelled out from under this run.
+
+        A cancelled job is already in a terminal state, so writing the run's
+        own outcome over it would be both wrong and an illegal transition.
+        Cancellation used to be discovered only by the InvalidTransitionError
+        it produced, which escaped run_job entirely.
+        """
+        return await self.persistence.get_job_state(job_name) is JobState.CANCELLED
 
     async def _execute_shell(
         self, job_name: str, run_id: str, command: str, timeout: float

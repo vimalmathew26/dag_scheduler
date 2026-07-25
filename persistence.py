@@ -363,6 +363,38 @@ class Persistence:
             ) as cursor:
                 return [dict(row) for row in await cursor.fetchall()]
 
+    async def record_cancelled_run(self, job_name: str) -> None:
+        """Record a cancellation for a job that never started a process.
+
+        start_time stays NULL because nothing ever started, and exit_code
+        stays NULL because no process exited.  Inventing a sentinel here
+        would be the same dishonesty the UNKNOWN state exists to avoid.
+        """
+        import time
+        import uuid
+        end_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        attempt = await self.get_job_attempt(job_name)
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                '''
+                INSERT INTO job_runs
+                    (run_id, job_name, state, start_time, end_time, exit_code, attempt)
+                VALUES (?, ?, ?, NULL, ?, NULL, ?)
+                ''',
+                (str(uuid.uuid4()), job_name, JobState.CANCELLED.value,
+                 end_time, attempt)
+            )
+            await db.commit()
+
+    async def get_job_state(self, name: str) -> Optional[JobState]:
+        """Current state of a job, or None if it is not in the database."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT state FROM jobs WHERE name = ?", (name,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return JobState(row[0]) if row else None
+
     async def record_run(self, run):
         """Record a new job run in the database."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -375,7 +407,9 @@ class Persistence:
             )
             await db.commit()
 
-    async def finalize_run(self, run_id: str, state: 'JobState', exit_code: int):
+    async def finalize_run(
+        self, run_id: str, state: 'JobState', exit_code: Optional[int]
+    ):
         """Finalize a job run with end state and exit code."""
         import time
         end_time = time.strftime('%Y-%m-%d %H:%M:%S')

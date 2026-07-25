@@ -274,15 +274,23 @@ async def cancel_job(
                 detail=f"Cannot cancel job in state {current_state}"
             )
             
-        # Transition to CANCELLED (#7)
+        # Mark the job cancelled before killing anything, so the executor
+        # sees the cancellation and records the run as cancelled rather than
+        # writing its own outcome over it.
         await pers.update_job_state(job_id, JobState.CANCELLED)
-        
-        # If running, kill the process via process manager
+
+        started = False
         if current_state == JobState.RUNNING:
-            killed = await proc_mgr.kill_by_job_name(job_id)
-            if killed:
+            started = await proc_mgr.kill_by_job_name(job_id)
+            if started:
                 logger.info(f"Process for job '{job_id}' killed on cancel")
-            
+
+        if not started:
+            # Nothing was ever spawned: either the job was still queued, or
+            # it was claimed but had not reached a concurrency slot. The run
+            # record carries a NULL exit code because no process exited.
+            await pers.record_cancelled_run(job_id)
+
         return {"status": "success", "message": f"Job {job_id} cancelled"}
     except HTTPException:
         raise

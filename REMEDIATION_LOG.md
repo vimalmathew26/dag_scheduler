@@ -305,6 +305,42 @@ grep -o "Invalid transition for job 'slow_job': [a-z_ ->]*" /tmp/repro/b4.log | 
 Job level is right. Run level claims four timeouts with a sentinel exit
 code of -1, and 33 dispatch tasks died.
 
+### AFTER
+
+```
+### job-level state
+('cancelled',)
+### run-level states (a cancelled run must not say timed_out)
+('cancelled', -15, 0)
+### unretrieved task exceptions
+0
+### illegal transitions attempted
+(none)
+```
+
+One run row, correctly labelled `cancelled`, carrying the real SIGTERM
+return code of -15 rather than an invented -1, with `end_time` set. No
+illegal transitions and no crashed tasks.
+
+### Fix, per DECISION 3
+
+Cancellation is now something the executor checks for rather than
+discovers by raising. After the process ends, `run_job` asks whether the
+job was cancelled; if so it finalizes the run as CANCELLED with the real
+return code and does not attempt to write its own outcome over a terminal
+state. The same check guards the generic exception handler, which
+previously called `update_job_state` and so could raise the very error
+class it existed to absorb.
+
+A job cancelled before it reaches a concurrency slot returns without
+recording a run, because nothing started.
+
+Exit code recording follows DECISION 3 exactly. Cancelled while running
+records the actual return code of the killed process. Cancelled while
+queued, where no process ever existed, records NULL for both `start_time`
+and `exit_code` and sets `end_time`. No sentinel is invented for a process
+that never ran.
+
 ---
 
 ## B5: crash recovery reconciles jobs but not runs
