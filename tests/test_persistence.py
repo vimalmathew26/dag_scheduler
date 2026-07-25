@@ -105,41 +105,72 @@ class TestPriorityAging:
     async def test_only_queued_jobs_age(self, persistence):
         await persistence.upsert_job("q", JobDefinition(command="true", priority=1))
         await persistence.update_job_state("q", JobState.QUEUED)
+        await persistence.mark_queued_at("q", seconds_ago=300)
         await persistence.upsert_job("d", JobDefinition(command="true", priority=1))
 
-        await persistence.age_queued_priorities()
+        promoted = await persistence.age_queued_priorities(interval_seconds=60)
 
-        async def priority_of(name):
-            import aiosqlite
+        assert promoted == 1
+        assert await persistence.priority_of("q") == 2
+        assert await persistence.priority_of("d") == 1
 
-            async with (
-                aiosqlite.connect(persistence.db_path) as db,
-                db.execute("SELECT current_priority FROM jobs WHERE name = ?", (name,)) as c,
-            ):
-                return (await c.fetchone())[0]
+    async def test_a_starved_job_overtakes_a_newer_higher_priority_one(self, persistence):
+        """The whole point of aging.
 
-        assert await priority_of("q") == 2
-        assert await priority_of("d") == 1
-
-    async def test_aging_preserves_relative_order(self, persistence):
-        """Aging increments every queued job, so it cannot reorder them.
-
-        This documents current behaviour rather than endorsing it. A
-        starved low-priority job never overtakes a newer high-priority one,
-        because the gap between them is invariant under a uniform
-        increment. Recorded in FINDINGS.md as F3.
+        This used to be impossible: every queued job was incremented by the
+        same amount, so the gap between any two was invariant and the
+        dispatch order never changed however long a job waited.
         """
         await persistence.upsert_job("old", JobDefinition(command="true", priority=1))
         await persistence.update_job_state("old", JobState.QUEUED)
+        await persistence.mark_queued_at("old", seconds_ago=600)
+
         await persistence.upsert_job("new", JobDefinition(command="true", priority=3))
         await persistence.update_job_state("new", JobState.QUEUED)
 
-        for _ in range(50):
-            await persistence.age_queued_priorities()
+        for _ in range(3):
+            await persistence.age_queued_priorities(interval_seconds=60)
 
-        assert await persistence.claim_next_queued_job() == "new", (
-            "50 aging rounds do not let the starved job overtake"
-        )
+        assert await persistence.claim_next_queued_job() == "old"
+
+    async def test_a_freshly_queued_job_is_not_aged(self, persistence):
+        await persistence.upsert_job("fresh", JobDefinition(command="true", priority=1))
+        await persistence.update_job_state("fresh", JobState.QUEUED)
+
+        await persistence.age_queued_priorities(interval_seconds=60)
+
+        assert await persistence.priority_of("fresh") == 1
+
+    async def test_only_jobs_past_the_interval_are_aged(self, persistence):
+        await persistence.upsert_job("waited", JobDefinition(command="true", priority=1))
+        await persistence.update_job_state("waited", JobState.QUEUED)
+        await persistence.mark_queued_at("waited", seconds_ago=300)
+
+        await persistence.upsert_job("fresh", JobDefinition(command="true", priority=1))
+        await persistence.update_job_state("fresh", JobState.QUEUED)
+
+        await persistence.age_queued_priorities(interval_seconds=60)
+
+        assert await persistence.priority_of("waited") == 2
+        assert await persistence.priority_of("fresh") == 1
+
+    async def test_only_queued_jobs_are_aged_at_all(self, persistence):
+        await persistence.upsert_job("d", JobDefinition(command="true", priority=1))
+        await persistence.age_queued_priorities(interval_seconds=0)
+        assert await persistence.priority_of("d") == 1
+
+    async def test_claiming_and_requeueing_restarts_the_clock(self, persistence):
+        """A job that runs and is re-queued has not been waiting."""
+        await persistence.upsert_job("j", JobDefinition(command="true", priority=1))
+        await persistence.update_job_state("j", JobState.QUEUED)
+        await persistence.mark_queued_at("j", seconds_ago=600)
+        await persistence.claim_next_queued_job()
+        await persistence.update_job_state("j", JobState.FAILED)
+        await persistence.update_job_state("j", JobState.QUEUED)
+
+        await persistence.age_queued_priorities(interval_seconds=60)
+
+        assert await persistence.priority_of("j") == 1
 
 
 class TestResetJobState:

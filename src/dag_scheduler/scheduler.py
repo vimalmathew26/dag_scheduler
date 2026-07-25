@@ -216,8 +216,12 @@ class Scheduler:
         while self.running:
             await asyncio.sleep(PRIORITY_AGING_INTERVAL)
             try:
-                await self.persistence.age_queued_priorities()
-                logger.debug("Priority aging applied to queued jobs.")
+                promoted = await self.persistence.age_queued_priorities(PRIORITY_AGING_INTERVAL)
+                if promoted:
+                    logger.info(
+                        f"Priority aging promoted {promoted} job(s) that have "
+                        f"waited over {PRIORITY_AGING_INTERVAL}s"
+                    )
             except asyncio.CancelledError:
                 break
             except Exception as e:

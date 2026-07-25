@@ -68,11 +68,13 @@ class Persistence:
                     state TEXT NOT NULL DEFAULT 'defined',
                     current_priority INTEGER NOT NULL DEFAULT 1,
                     current_attempt INTEGER NOT NULL DEFAULT 1,
+                    queued_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
             await self._migrate_add_current_attempt(db)
+            await self._migrate_add_queued_at(db)
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS job_runs (
                     run_id TEXT PRIMARY KEY,
@@ -118,6 +120,33 @@ class Persistence:
                 "ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 1"
             )
             logger.info("Migrated jobs table: added current_attempt")
+
+    async def _migrate_add_queued_at(self, db: aiosqlite.Connection) -> None:
+        """Add jobs.queued_at to databases created before priority aging
+        was made time-aware."""
+        async with db.execute("PRAGMA table_info(jobs)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if "queued_at" not in columns:
+            await db.execute("ALTER TABLE jobs ADD COLUMN queued_at TIMESTAMP")
+            logger.info("Migrated jobs table: added queued_at")
+
+    async def priority_of(self, name: str) -> int:
+        """Current effective priority of a job."""
+        async with (
+            aiosqlite.connect(self.db_path) as db,
+            db.execute("SELECT current_priority FROM jobs WHERE name = ?", (name,)) as cursor,
+        ):
+            row = await cursor.fetchone()
+            return int(row[0]) if row else 0
+
+    async def mark_queued_at(self, name: str, seconds_ago: int) -> None:
+        """Backdate a job's queue timestamp. For tests."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE jobs SET queued_at = datetime('now', ?) WHERE name = ?",
+                (f"-{int(seconds_ago)} seconds", name),
+            )
+            await db.commit()
 
     async def set_job_attempt(self, name: str, attempt: int) -> None:
         """Record which attempt the next dispatch of this job represents."""
@@ -211,9 +240,21 @@ class Persistence:
                 return
             self.validate_transition(name, current_state, state)
 
+            # queued_at is the clock priority aging reads. It starts when
+            # a job enters the queue and is cleared when it leaves, so a job
+            # that runs and is re-queued has not been waiting.
+            if state is JobState.QUEUED:
+                queued_at_sql = "CURRENT_TIMESTAMP"
+            elif current_state is JobState.QUEUED:
+                queued_at_sql = "NULL"
+            else:
+                queued_at_sql = "queued_at"
+
             cursor = await db.execute(
-                """
-                UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP
+                f"""
+                UPDATE jobs
+                SET state = ?, updated_at = CURRENT_TIMESTAMP,
+                    queued_at = {queued_at_sql}
                 WHERE name = ? AND state = ?
                 """,
                 (state.value, name, current_state.value),
@@ -298,7 +339,7 @@ class Persistence:
             async with db.execute(
                 f"""
                 UPDATE jobs
-                SET state = ?, updated_at = CURRENT_TIMESTAMP
+                SET state = ?, updated_at = CURRENT_TIMESTAMP, queued_at = NULL
                 WHERE name = (
                     SELECT name FROM jobs
                     WHERE state = ?{filter_sql}
@@ -336,18 +377,34 @@ class Persistence:
                 await self.update_job_state(name, JobState.BLOCKED_UNRESOLVABLE)
         return orphaned
 
-    async def age_queued_priorities(self) -> None:
-        """Increment priority of all queued jobs (priority aging)."""
+    async def age_queued_priorities(self, interval_seconds: float) -> int:
+        """Promote jobs that have been queued longer than one interval.
+
+        Returns the number of jobs promoted.
+
+        This used to increment every queued job by one, unconditionally.
+        That is not aging: a uniform increment leaves the gap between any
+        two jobs unchanged, so the dispatch order was invariant and a
+        starved low-priority job could never overtake a newer high-priority
+        one, which is the only thing aging exists to do.
+
+        Promoting only jobs that have already waited a full interval means
+        a job accumulates priority in proportion to how long it has been
+        waiting, and a job queued a moment ago accumulates none.
+        """
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
+            cursor = await db.execute(
                 """
                 UPDATE jobs
                 SET current_priority = current_priority + 1
                 WHERE state = ?
+                  AND queued_at IS NOT NULL
+                  AND queued_at <= datetime('now', ?)
                 """,
-                (JobState.QUEUED.value,),
+                (JobState.QUEUED.value, f"-{int(interval_seconds)} seconds"),
             )
             await db.commit()
+            return int(cursor.rowcount)
 
     async def reset_job_state(self, name: str) -> bool:
         """Reset a job in a terminal state back to DEFINED.

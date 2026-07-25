@@ -79,7 +79,7 @@ old database, either move it or let a new one be created.
 ### Running the tests
 
 ```bash
-pytest                       # 461 tests
+pytest                       # 468 tests
 ruff check . && mypy .
 ```
 
@@ -258,8 +258,11 @@ statement that also marks it running, so a job is dispatched exactly once.
 It does not claim while the executor is at its concurrency limit
 (`MAX_CONCURRENT`, 4).
 
-Priority aging increments queued jobs every `PRIORITY_AGING_INTERVAL`
-seconds.
+Priority aging promotes jobs that have already waited longer than
+`PRIORITY_AGING_INTERVAL`, so a job accumulates priority in proportion to
+how long it has been queued and a job queued a moment ago accumulates none.
+A low-priority job that has been starved will eventually overtake newer
+high-priority work.
 
 ### Execution
 
