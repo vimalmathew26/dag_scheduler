@@ -1,51 +1,89 @@
-"""Configuration constants for the DAG scheduler.
+"""Configuration for the DAG scheduler.
 
-Importing this module has no side effects.  Paths are resolved here but
-nothing is created: directory creation happens once, explicitly, at
-daemon startup via ensure_directories().
+Importing this module has no side effects. Paths are resolved here but
+nothing is created: directory creation happens once, explicitly, at daemon
+startup via ensure_directories().
 
-Importing a module used to create directories under the user's data
-directory, which meant no test could run without touching real state.
+Anything that changes per deployment reads from the environment. Anything
+that is genuinely a property of the design stays a constant.
+
+Per-job defaults deliberately do not live here. They belong to the schema
+and are declared once on the pydantic models in models.py; keeping a second
+copy meant the same five numbers were written down in three places.
 """
 
 import os
 from pathlib import Path
 from typing import Optional
 
-# Paths
-BASE_DIR = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')) / 'dag_scheduler'
+# --------------------------------------------------------------------------
+# Environment-overridable: these change per machine and per deployment.
+# --------------------------------------------------------------------------
 
-DB_PATH = BASE_DIR / 'scheduler.db'
-# Job definitions belong to the operator, not to the installed package.
-# This used to resolve inside the package directory, so after a pip install
-# `dag-scheduler load` wrote user files into site-packages and pip uninstall
-# deleted them.
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be an integer, got {raw!r}") from None
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        raise ValueError(f"{name} must be a number, got {raw!r}") from None
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+# Paths
+BASE_DIR = Path(
+    os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')
+) / 'dag_scheduler'
+
+DB_PATH = Path(os.environ.get('DAG_SCHEDULER_DB', BASE_DIR / 'scheduler.db'))
+
+# Job definitions belong to the operator, not to the installed package. This
+# used to resolve inside the package directory, so after a pip install
+# `dag-scheduler load` wrote user files into site-packages.
 JOBS_DIR = Path(os.environ.get('DAG_SCHEDULER_JOBS_DIR', Path.cwd() / 'jobs'))
 
-# Execution settings
-MAX_CONCURRENT = 4
-DEFAULT_TIMEOUT = 60  # seconds
-DEFAULT_RETRY = 3
+# Execution
+MAX_CONCURRENT = _env_int('DAG_SCHEDULER_MAX_CONCURRENT', 4)
 
-# API settings
-API_PORT = 8000
-API_HOST = '127.0.0.1'
+# API
+API_HOST = os.environ.get('DAG_SCHEDULER_HOST', '127.0.0.1')
+API_PORT = _env_int('DAG_SCHEDULER_PORT', 8000)
+API_TOKEN: Optional[str] = os.environ.get('DAG_SCHEDULER_TOKEN') or None
 
-# Retry policy defaults
-DEFAULT_BACKOFF_BASE = 2.0
-DEFAULT_JITTER = True
-DEFAULT_RETRY_ON_EXIT_CODES = [1]
+# Scheduler
+PRIORITY_AGING_INTERVAL = _env_float('DAG_SCHEDULER_AGING_INTERVAL', 60.0)
 
-# Scheduler settings
-PRIORITY_AGING_INTERVAL = 60  # seconds
-GRACEFUL_KILL_TIMEOUT = 5  # seconds before SIGKILL after SIGTERM
+# Logging
+LOG_LEVEL = os.environ.get('DAG_SCHEDULER_LOG_LEVEL', 'INFO')
+LOG_JSON = _env_bool('DAG_SCHEDULER_LOG_JSON')
+
+# --------------------------------------------------------------------------
+# Constants: properties of the design, not of a deployment. Nobody needs to
+# tune these, and exposing them would only invite drift.
+# --------------------------------------------------------------------------
+
+GRACEFUL_KILL_TIMEOUT = 5  # seconds between SIGTERM and SIGKILL
+SHUTDOWN_TIMEOUT = 10  # seconds to drain the API and in-flight jobs
 LOG_BATCH_SIZE = 100  # log lines buffered before a write
 LOG_FLUSH_INTERVAL = 0.5  # seconds before a partial log buffer is written
-
-LOG_LEVEL = os.environ.get('DAG_SCHEDULER_LOG_LEVEL', 'INFO')
-LOG_JSON = os.environ.get('DAG_SCHEDULER_LOG_JSON', '').lower() in ('1', 'true', 'yes')
-
-SHUTDOWN_TIMEOUT = 10  # seconds to wait for the API and in-flight jobs to drain
 
 
 def ensure_directories(

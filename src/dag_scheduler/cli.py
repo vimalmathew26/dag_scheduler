@@ -1,6 +1,8 @@
-import click
 import asyncio
+import os
 import sys
+
+import click
 from pathlib import Path
 from typing import Optional
 import httpx
@@ -8,12 +10,26 @@ import shutil
 
 from .config import JOBS_DIR, API_HOST, API_PORT
 
-API_BASE_URL = f"http://{API_HOST}:{API_PORT}"
+DEFAULT_API_URL = os.environ.get(
+    "DAG_SCHEDULER_API_URL", f"http://{API_HOST}:{API_PORT}"
+)
+API_BASE_URL = DEFAULT_API_URL
+
+
+def _auth_headers():
+    token = os.environ.get("DAG_SCHEDULER_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
 
 @click.group()
-def cli():
+@click.option('--api-url', default=None,
+              help='Base URL of the daemon API. Defaults to '
+                   'DAG_SCHEDULER_API_URL or http://127.0.0.1:8000.')
+def cli(api_url):
     """DAG Scheduler CLI"""
-    pass
+    global API_BASE_URL
+    if api_url:
+        API_BASE_URL = api_url.rstrip('/')
 
 @cli.command()
 @click.option('--jobs-dir', type=click.Path(), default=None,
@@ -65,7 +81,7 @@ def status():
 def trigger(name):
     """Force-queue a job"""
     try:
-        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/trigger")
+        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/trigger", headers=_auth_headers())
         response.raise_for_status()
         result = response.json()
         click.echo(result.get('message', 'Job triggered successfully'))
@@ -177,7 +193,7 @@ def stats():
 def cancel(name):
     """Cancel a queued or running job"""
     try:
-        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/cancel")
+        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/cancel", headers=_auth_headers())
         response.raise_for_status()
         result = response.json()
         click.echo(result.get('message', 'Job cancellation requested'))
@@ -193,7 +209,7 @@ def cancel(name):
 def reset(name):
     """Reset a job in a terminal state back to defined"""
     try:
-        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/reset")
+        response = httpx.post(f"{API_BASE_URL}/jobs/{name}/reset", headers=_auth_headers())
         response.raise_for_status()
         result = response.json()
         click.echo(result.get('message', 'Job reset successfully'))

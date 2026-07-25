@@ -8,6 +8,7 @@ from .config import (
     API_PORT,
     DB_PATH,
     JOBS_DIR,
+    API_TOKEN,
     LOG_JSON,
     LOG_LEVEL,
     SHUTDOWN_TIMEOUT,
@@ -134,6 +135,19 @@ class Daemon:
         # race ours. The daemon owns the shutdown sequence.
         self.api_server.install_signal_handlers = lambda: None
         self.api_task = asyncio.create_task(self.api_server.serve())
+
+        if API_TOKEN:
+            logger.info("API authentication enabled")
+        else:
+            logger.warning(
+                "API is unauthenticated. Set DAG_SCHEDULER_TOKEN to require a "
+                "bearer token on trigger, cancel and reset."
+            )
+        if API_HOST not in ("127.0.0.1", "localhost", "::1"):
+            logger.warning(
+                f"API is bound to {API_HOST}, which is not loopback. Anyone who "
+                f"can reach this port can trigger jobs."
+            )
 
         logger.info(f"Daemon started (API: {API_HOST}:{API_PORT})")
 

@@ -1,16 +1,47 @@
 # api.py - FastAPI endpoints for the DAG scheduler
 
 import logging
-from typing import List, Optional, Dict, Any
-from fastapi import FastAPI, HTTPException, Query, Depends, Request
+import secrets
+from typing import Any, Dict, List, Optional
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
 import aiosqlite
 import json
 
+from .config import API_TOKEN
 from .models import JobState
 
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="DAG Scheduler API", version="0.1.0")
+app = FastAPI(title="DAG Scheduler API", version="0.2.0")
+
+# Reads stay open on loopback. The mutating routes are gated, because any
+# local process, including a web page issuing a cross-origin POST, could
+# otherwise trigger or cancel jobs.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[],
+    allow_credentials=False,
+    allow_methods=["GET", "POST"],
+    allow_headers=["*"],
+)
+
+
+def require_token(authorization: Optional[str] = Header(default=None)) -> None:
+    """Gate a mutating endpoint behind a shared token.
+
+    If DAG_SCHEDULER_TOKEN is unset the daemon runs unauthenticated, which
+    is reasonable for a single-node daemon bound to loopback and is what the
+    startup log warns about. Deliberately not users and roles: this is one
+    process on one machine, and the real privilege boundary is write access
+    to the jobs directory, since definitions run as shell commands.
+    """
+    if not API_TOKEN:
+        return
+    expected = f"Bearer {API_TOKEN}"
+    if not authorization or not secrets.compare_digest(authorization, expected):
+        raise HTTPException(status_code=401, detail="Missing or invalid token")
 
 
 # --------------- Dependency injection helpers ---------------
@@ -220,7 +251,7 @@ async def get_run_logs(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.post("/jobs/{job_id}/trigger")
+@app.post("/jobs/{job_id}/trigger", dependencies=[Depends(require_token)])
 async def trigger_job(
     job_id: str,
     reg=Depends(_get_registry),
@@ -244,7 +275,7 @@ async def trigger_job(
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.post("/jobs/{job_id}/cancel")
+@app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
 async def cancel_job(
     job_id: str,
     pers=Depends(_get_persistence),
@@ -347,7 +378,7 @@ async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
-@app.post("/jobs/{job_id}/reset")
+@app.post("/jobs/{job_id}/reset", dependencies=[Depends(require_token)])
 async def reset_job(
     job_id: str,
     pers=Depends(_get_persistence),

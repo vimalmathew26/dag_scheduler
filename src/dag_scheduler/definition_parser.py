@@ -5,7 +5,6 @@ from pathlib import Path
 from typing import Any, Dict, List, Set, Tuple
 from .models import JobDefinition, DefinitionFile, RetryPolicy
 from .dag import topological_sort, CycleError
-from .config import DEFAULT_TIMEOUT, DEFAULT_RETRY, DEFAULT_BACKOFF_BASE, DEFAULT_JITTER, DEFAULT_RETRY_ON_EXIT_CODES
 
 logger = logging.getLogger(__name__)
 
@@ -155,23 +154,10 @@ class DefinitionParser:
 
         # Build JobDefinition objects for remaining valid jobs
         for job_name, job_dict in raw_definitions.items():
-            deps = job_dict.get("depends_on", [])
-            retry_dict = job_dict.get("retry", {})
-            retry_policy = RetryPolicy(
-                max_attempts=retry_dict.get("max_attempts", DEFAULT_RETRY),
-                backoff_base=retry_dict.get("backoff_base", DEFAULT_BACKOFF_BASE),
-                jitter=retry_dict.get("jitter", DEFAULT_JITTER),
-                retry_on_exit_codes=retry_dict.get("retry_on_exit_codes", DEFAULT_RETRY_ON_EXIT_CODES)
-            )
-
-            self.all_jobs[job_name] = JobDefinition(
-                command=job_dict["command"],
-                depends_on=deps,
-                tags=job_dict.get("tags", []),
-                priority=job_dict.get("priority", 1),
-                timeout=job_dict.get("timeout", DEFAULT_TIMEOUT),
-                retry=retry_policy
-            )
+            # Defaults are the model's, not a second copy kept in config.
+            fields = {k: v for k, v in job_dict.items() if k != "retry"}
+            fields["retry"] = RetryPolicy(**job_dict.get("retry", {}))
+            self.all_jobs[job_name] = JobDefinition(**fields)
 
         # Pass 3: Cycle detection — iteratively remove cyclic jobs instead of
         # failing the entire load.  After removing cycle participants, cascade
