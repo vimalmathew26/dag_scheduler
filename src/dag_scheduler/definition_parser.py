@@ -126,7 +126,7 @@ class DefinitionParser:
                 logger.warning(f"Skipping job '{job_name}': 'depends_on' must be a list")
                 to_remove.add(job_name)
                 continue
-            
+
             for dep in deps:
                 if dep not in raw_definitions:
                     logger.warning(

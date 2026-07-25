@@ -33,32 +33,32 @@ class Daemon:
         self.log_store = LogStore(self.db_path)
         self.process_manager = ProcessManager(self.persistence)
         self.registry = Registry(self.persistence, self.jobs_dir)
-        
+
         # Executor initialized with placeholders, retry_engine linked later
         self.executor = Executor(self.persistence, self.process_manager, self.log_store)
         self.scheduler = Scheduler(self.persistence, self.registry, self.executor)
         self.retry_engine = RetryEngine(self.scheduler)
         self.executor.set_retry_engine(self.retry_engine)
         self.executor.set_scheduler(self.scheduler)
-        
+
         self.file_watcher = FileWatcher(self.registry, self.jobs_dir)
-        
+
     async def shutdown(self, sig=None):
         if sig:
             logger.info(f"Received exit signal {sig.name}...")
         self.stop_event.set()
-        
+
         logger.info("Stopping scheduler...")
         await self.scheduler.stop()
-        
+
         logger.info("Stopping file watcher...")
         await self.file_watcher.stop()
-        
+
         # API (uvicorn) shutdown is handled by the server task being cancelled
-        
+
         tasks = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
         [t.cancel() for t in tasks]
-        
+
         logger.info(f"Cancelling {len(tasks)} outstanding tasks")
         await asyncio.gather(*tasks, return_exceptions=True)
         logger.info("Daemon shutdown complete.")
@@ -66,10 +66,10 @@ class Daemon:
     async def run(self):
         # 1. DB Setup
         await self.persistence.setup()
-        
+
         # 2. Crash Recovery
         await self.process_manager.handle_crash_recovery()
-        
+
         # 3. Registry Initial Load
         try:
             await self.registry.load_initial()
@@ -96,7 +96,7 @@ class Daemon:
 
 async def main_async():
     daemon = Daemon()
-    
+
     loop = asyncio.get_running_loop()
     for sig in (signal.SIGINT, signal.SIGTERM):
         loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(daemon.shutdown(s)))

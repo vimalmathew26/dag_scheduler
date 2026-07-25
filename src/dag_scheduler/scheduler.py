@@ -132,13 +132,13 @@ class Scheduler:
         # Check dependencies
         db_jobs = await self.persistence.get_all_db_jobs()
         current_states = {name: info['state'] for name, info in db_jobs.items()}
-        
+
         ready = True
         for dep in definition.depends_on:
             if dep not in current_states or current_states[dep] != JobState.DONE:
                 ready = False
                 break
-        
+
         target_state = JobState.QUEUED if ready else JobState.WAITING
         await self.persistence.update_job_state(job_name, target_state)
 
@@ -151,10 +151,10 @@ class Scheduler:
 
         db_jobs = await self.persistence.get_all_db_jobs()
         current_states = {name: info['state'] for name, info in db_jobs.items()}
-        
+
         # registry.get_all_jobs() gives the full snapshot for dag fan-out
         jobs_snapshot = self.registry.get_all_jobs()
-        
+
         newly_ready = get_ready_jobs(job_name, jobs_snapshot, current_states)
         for next_job in newly_ready:
             # Transition waiting -> queued

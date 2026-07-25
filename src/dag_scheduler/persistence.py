@@ -20,7 +20,7 @@ class InvalidTransitionError(Exception):
 
 class Persistence:
     """Handles all database operations with SQLite in WAL mode."""
-    
+
     VALID_TRANSITIONS = {
         # Normal forward transitions
         (JobState.DEFINED, JobState.QUEUED),
@@ -35,23 +35,24 @@ class Persistence:
         (JobState.QUEUED, JobState.BLOCKED_UNRESOLVABLE),
         (JobState.BLOCKED_UNRESOLVABLE, JobState.WAITING),
         (JobState.BLOCKED_UNRESOLVABLE, JobState.QUEUED),
-        # Cancellation transitions (#7)
+        # Cancellation, from the two states where work is outstanding
         (JobState.QUEUED, JobState.CANCELLED),
         (JobState.RUNNING, JobState.CANCELLED),
-        # Re-enqueue transitions for retry (#2, #8)
+        # Direct re-enqueue of a failed job
         (JobState.FAILED, JobState.QUEUED),
         (JobState.FAILED, JobState.WAITING),
-        # Reset transitions: terminal states back to DEFINED (#8)
+        # Every terminal state can be reset, which is how a job becomes
+        # runnable again after finishing
         (JobState.DONE, JobState.DEFINED),
         (JobState.FAILED, JobState.DEFINED),
         (JobState.TIMED_OUT, JobState.DEFINED),
         (JobState.UNKNOWN, JobState.DEFINED),
         (JobState.CANCELLED, JobState.DEFINED),
     }
-    
+
     def __init__(self, db_path: Path = DB_PATH):
         self.db_path = db_path
-    
+
     async def setup(self):
         """Initialize database with WAL mode and create tables."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -206,7 +207,7 @@ class Persistence:
 
     async def revalidate_jobs(self, current_snapshot: Dict[str, JobDefinition]):
         """
-        Re-evaluate all jobs in DB (waiting, queued, blocked_unresolvable) 
+        Re-evaluate all jobs in DB (waiting, queued, blocked_unresolvable)
         against the current graph snapshot.
         """
         db_jobs = await self.get_all_db_jobs()
@@ -227,13 +228,13 @@ class Persistence:
                     if dep not in current_snapshot:
                         unresolvable = True
                         break
-                
+
                 if unresolvable:
                     if state != JobState.BLOCKED_UNRESOLVABLE:
                         await self.update_job_state(name, JobState.BLOCKED_UNRESOLVABLE)
                 else:
                     # Not unresolvable anymore, determine if waiting or queued
-                    # (Actual scheduling logic will handle transition to QUEUED based on status of deps, 
+                    # (Actual scheduling logic will handle transition to QUEUED based on status of deps,
                     # but here we can move from BLOCKED -> WAITING at least)
                     if state == JobState.BLOCKED_UNRESOLVABLE:
                         await self.update_job_state(name, JobState.WAITING)

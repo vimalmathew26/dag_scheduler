@@ -30,11 +30,12 @@ class Registry:
                 for name, definition in new_jobs.items():
                     await self.persistence.upsert_job(name, definition)
             except Exception as e:
+                # parse_directory reports per-file and per-job problems as
+                # warnings and returns whatever loaded cleanly, so reaching
+                # here means something unexpected went wrong rather than a
+                # bad definition. The daemon logs it and starts anyway.
                 logger.error(f"Initial load failed: {e}")
-                # On initial load, we might want to let the daemon start anyway 
-                # if some files are valid, or hard error. The spec says 
-                # parse_directory raises ParseError on any violation.
-                raise e
+                raise
 
     async def reload(self):
         """
@@ -44,12 +45,14 @@ class Registry:
         async with self._reload_lock:
             parser = DefinitionParser()
             try:
-                # parse_directory handles validation (two-pass, cycle, etc.)
                 new_jobs = parser.parse_directory(self.jobs_dir)
             except Exception as e:
-                logger.error(f"Reload failed: {e}")
-                # Atomic swap: new snapshot only replaces old after clean validation.
-                raise e
+                # The previous snapshot is kept if parsing blows up entirely.
+                # Note this is not a validation gate: parse_directory drops
+                # bad jobs and returns the rest rather than raising, so a
+                # partial result is a normal outcome, not a failure.
+                logger.error(f"Reload failed, keeping the previous snapshot: {e}")
+                raise
 
             old_jobs = self.jobs
             self.jobs = new_jobs

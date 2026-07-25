@@ -34,7 +34,7 @@ def load(path):
     try:
         src_path = Path(path)
         dest_path = JOBS_DIR / src_path.name
-        
+
         # Copy the file to JOBS_DIR
         shutil.copy2(src_path, dest_path)
         click.echo(f"File copied to {dest_path} - daemon will hot-reload within 500ms.")
@@ -49,7 +49,7 @@ def status():
         response = httpx.get(f"{API_BASE_URL}/jobs")
         response.raise_for_status()
         jobs = response.json()
-        
+
         click.echo("Job Status:")
         for job in jobs:
             click.echo(f"  {job['name']:30s} {job['state']}")
@@ -85,22 +85,22 @@ def logs(name):
         runs_response = httpx.get(f"{API_BASE_URL}/jobs/{name}/runs")
         runs_response.raise_for_status()
         runs = runs_response.json()
-        
+
         if not runs:
             click.echo(f"No runs found for job '{name}'")
             return
-        
+
         # /jobs/{name}/runs is ordered newest first, so the most recent run
         # is the first element.  This used to take runs[-1], which is the
         # oldest, so `logs` showed the first run rather than the latest.
         latest_run = runs[0]
         run_id = latest_run['run_id']
-        
+
         # Now get the logs for that run
         logs_response = httpx.get(f"{API_BASE_URL}/jobs/{name}/runs/{run_id}/logs")
         logs_response.raise_for_status()
         logs_data = logs_response.json()
-        
+
         # Sort logs by timestamp and print them
         all_logs = []
         for log_entry in logs_data:
@@ -111,14 +111,14 @@ def logs(name):
             lines = chunk.splitlines()
             for line in lines:
                 all_logs.append((timestamp, f"[{stream}] {line}"))
-        
+
         # Sort by timestamp
         all_logs.sort(key=lambda x: x[0])
-        
+
         # Print the sorted logs
         for _, log_line in all_logs:
             click.echo(log_line)
-            
+
     except httpx.RequestError:
         click.echo("Daemon not running (connection refused)", err=True)
         sys.exit(1)
@@ -134,7 +134,7 @@ def runs(name):
         response = httpx.get(f"{API_BASE_URL}/jobs/{name}/runs")
         response.raise_for_status()
         runs = response.json()
-        
+
         click.echo(f"Run history for job: {name}")
         for run in runs:
             run_id_short = run['run_id'][:8]
@@ -157,7 +157,7 @@ def stats():
         response = httpx.get(f"{API_BASE_URL}/stats")
         response.raise_for_status()
         stats_data = response.json()
-        
+
         click.echo("Scheduler Statistics:")
         click.echo(f"  Total Runs: {stats_data.get('total_runs', 'N/A')}")
         click.echo(f"  Pass Rate: {stats_data.get('pass_rate', 'N/A'):.2%}")

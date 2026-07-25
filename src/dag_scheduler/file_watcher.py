@@ -24,19 +24,19 @@ class FileWatcher:
         """Start watching job definition directories."""
         # Capture the running event loop
         self._loop = asyncio.get_event_loop()
-        
+
         # Watch the main jobs directory
         if self.jobs_dir.exists():
             self._observer.schedule(self._handler, str(self.jobs_dir), recursive=False)
             self._watched_dirs.add(self.jobs_dir)
             logger.info(f"Started watching {self.jobs_dir}")
-        
+
         self._observer.start()
         logger.info("File watcher started")
-        
+
         # Pass the loop to the handler
         self._handler.set_loop(self._loop)
-        
+
         # Process events from queue
         while True:
             try:
@@ -46,29 +46,29 @@ class FileWatcher:
                 break
             except Exception as e:
                 logger.error(f"Error processing file event: {e}")
-    
+
     async def stop(self):
         """Stop watching directories."""
         self._observer.stop()
         self._observer.join()
         logger.info("File watcher stopped")
-    
+
     async def _handle_event(self, event):
         """Handle a file system event with debouncing."""
         src_path = Path(event.src_path)
-        
+
         # Filter for YAML/TOML files
         if src_path.suffix not in ['.yaml', '.yml', '.toml']:
             return
-        
+
         # Cancel any existing debounce task for this file
         if src_path in self._debounce_tasks:
             self._debounce_tasks[src_path].cancel()
-        
+
         # Create new debounce task
         task = asyncio.create_task(self._debounce_reload(src_path))
         self._debounce_tasks[src_path] = task
-    
+
     async def _debounce_reload(self, file_path: Path):
         """Reload registry after debounce delay."""
         try:
@@ -86,23 +86,23 @@ class FileWatcher:
 
 class _FileSystemHandler(FileSystemEventHandler):
     """Internal handler for file system events."""
-    
+
     def __init__(self, event_queue: asyncio.Queue):
         self.event_queue = event_queue
         self._loop = None
-    
+
     def set_loop(self, loop):
         """Set the asyncio event loop for thread-safe operations."""
         self._loop = loop
-    
+
     def on_modified(self, event):
         if not event.is_directory:
             self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
-    
+
     def on_created(self, event):
         if not event.is_directory:
             self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
-    
+
     def on_deleted(self, event):
         if not event.is_directory:
             self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)

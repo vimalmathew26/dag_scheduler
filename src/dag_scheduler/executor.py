@@ -70,12 +70,12 @@ class Executor:
                 start_time=start_time,
                 attempt=attempt
             )
-            
+
             # Record the run in DB via persistence
             await self.persistence.record_run(job_run)
 
             logger.info(f"Starting job {job_name} (run_id: {run_id}, attempt: {attempt})")
-            
+
             try:
                 exit_code, timed_out = await self._execute_shell(
                     job_name, run_id, definition.command, definition.timeout
@@ -109,7 +109,7 @@ class Executor:
                 job_run.state = final_state
                 job_run.end_time = end_time
                 job_run.exit_code = exit_code
-                
+
                 if final_state == JobState.DONE:
                     await self.persistence.update_job_state(job_name, JobState.DONE)
                     # Fan-out: notify scheduler so dependents get unblocked
@@ -188,12 +188,11 @@ class Executor:
     async def _stream_log(self, run_id: str, stream_name: str, stream_reader: Optional[asyncio.StreamReader]):
         if not stream_reader:
             return
-            
+
         while True:
             line = await stream_reader.readline()
             if not line:
                 break
-            
+
             chunk = line.decode('utf-8', errors='replace')
             await self.log_store.store_log_chunk(run_id, stream_name, chunk)
-
