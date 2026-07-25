@@ -78,6 +78,38 @@ wc -l < /tmp/repro/b1.log
 One trigger of a five-job chain produced 22 subprocess executions and 24
 crashed dispatch tasks.
 
+### AFTER
+
+```
+### one trigger of extract_data, then wait 12s
+200 {"status": "success", "message": "Job extract_data triggered"}
+### job_runs rows per job (expect exactly 1 each)
+('archive_old', 1)
+('cleanup_logs', 1)
+('extract_data', 1)
+('load_data', 1)
+('transform_data', 1)
+### total subprocess executions logged
+5
+### unretrieved task exceptions
+0
+### total daemon log lines
+27
+```
+
+Exactly one run per job. 22 executions down to 5, which is the whole
+chain. 24 crashed dispatch tasks down to 0. 293 log lines down to 27.
+
+### Fix
+
+Selection and claiming are now one statement. `claim_next_queued_job`
+issues a single `UPDATE ... WHERE name = (SELECT ... LIMIT 1) AND
+state='queued' RETURNING name`, so a job is handed out exactly once
+however fast the loop spins. `update_job_state` became a compare-and-swap
+against the state it read, so a transition validated against a stale read
+is rejected rather than applied. The loop also refuses to claim while the
+executor is at capacity, which bounds the pending task list.
+
 ---
 
 ## B2: retries never terminate

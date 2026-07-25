@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Set
 
 from .config import MAX_CONCURRENT, PRIORITY_AGING_INTERVAL
 from .models import JobState, JobDefinition
@@ -15,7 +15,17 @@ class Scheduler:
         self.executor = executor
         self._loop_task: Optional[asyncio.Task] = None
         self._aging_task: Optional[asyncio.Task] = None
+        self._dispatch_tasks: Set[asyncio.Task] = set()
         self.running = False
+        self.idle_poll_interval = 1.0
+        self.busy_poll_interval = 0.05
+
+    def _spawn(self, coro) -> asyncio.Task:
+        """Dispatch a job, holding a reference so it is not collected."""
+        task = asyncio.create_task(coro)
+        self._dispatch_tasks.add(task)
+        task.add_done_callback(self._dispatch_tasks.discard)
+        return task
 
     async def start(self):
         self.running = True
@@ -32,34 +42,55 @@ class Scheduler:
         logger.info("Scheduler stopped.")
 
     async def _main_loop(self):
-        """Polls for queued jobs and dispatches them."""
+        """Claim queued jobs one at a time and dispatch them.
+
+        Two rules keep this correct.  A job is claimed atomically, so it
+        can be handed out exactly once however fast the loop spins.  And
+        the loop refuses to claim while the executor is at capacity, so
+        the pending task list cannot grow without bound.
+
+        This loop used to SELECT a name, dispatch it, and immediately loop
+        again with no sleep.  The row stayed QUEUED until a dispatched task
+        transitioned it, so the same job was selected and dispatched
+        repeatedly.  One trigger produced 22 executions.
+        """
         while self.running:
             try:
-                # Respect MAX_CONCURRENT via executor's semaphore is handled inside executor.run_job,
-                # but we can also check here to avoid over-polling if we're full.
-                # However, the spec says 'Dispatches queued jobs to executor respecting MAX_CONCURRENT semaphore'.
-                # We will pick the highest priority QUEUED job and start it.
-                
-                job_name = await self._get_next_queued_job()
-                if job_name:
-                    definition = self.registry.get_job(job_name)
-                    if definition:
-                        # Fire and forget - the executor handles semaphore and state updates
-                        asyncio.create_task(self.executor.run_job(job_name, definition))
-                    else:
-                        # Job in DB but not in registry? Mark blocked.
-                        await self.persistence.update_job_state(job_name, JobState.BLOCKED_UNRESOLVABLE)
-                else:
-                    await asyncio.sleep(1) # Wait for jobs to be queued
+                if self.executor.at_capacity():
+                    await asyncio.sleep(self.busy_poll_interval)
+                    continue
+
+                eligible = self.registry.known_job_names()
+                job_name = await self.persistence.claim_next_queued_job(eligible)
+
+                if job_name is None:
+                    blocked = await self.persistence.block_queued_jobs_without_definitions(
+                        eligible
+                    )
+                    for name in blocked:
+                        logger.warning(
+                            f"Job '{name}' is queued but has no definition; "
+                            f"marking blocked_unresolvable"
+                        )
+                    await asyncio.sleep(self.idle_poll_interval)
+                    continue
+
+                definition = self.registry.get_job(job_name)
+                if definition is None:
+                    # Removed between the claim filter and this lookup.
+                    logger.warning(
+                        f"Job '{job_name}' lost its definition during dispatch"
+                    )
+                    await self.persistence.update_job_state(job_name, JobState.UNKNOWN)
+                    continue
+
+                logger.info(f"Dispatching job '{job_name}'")
+                self._spawn(self.executor.run_job(job_name, definition))
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.error(f"Error in scheduler main loop: {e}")
                 await asyncio.sleep(5)
-
-    async def _get_next_queued_job(self) -> Optional[str]:
-        """Fetch the highest priority job that is currently QUEUED (via persistence)."""
-        return await self.persistence.get_next_queued_job()
 
     async def enqueue_job(self, job_name: str, bypass_deps: bool = False, attempt: int = 1):
         """

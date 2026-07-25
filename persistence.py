@@ -132,16 +132,37 @@ class Persistence:
                 return {row['name']: {'state': JobState(row['state']), 'definition': json.loads(row['definition'])} for row in rows}
 
     async def update_job_state(self, name: str, state: JobState):
+        """Transition a job, rejecting illegal and racing transitions.
+
+        The write is a compare-and-swap against the state that was read.
+        Previously this was a read, a check and an unconditional write with
+        no transaction around them, so two callers could both read 'queued',
+        both validate, and both write 'running'.  That is how duplicate
+        dispatch bypassed the state machine.
+        """
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT state FROM jobs WHERE name = ?", (name,)) as cursor:
                 row = await cursor.fetchone()
                 if not row: return
                 current_state = JobState(row[0])
-            
+
             if current_state == state: return
             self.validate_transition(name, current_state, state)
-            await db.execute("UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?", (state.value, name))
+
+            cursor = await db.execute(
+                """
+                UPDATE jobs SET state = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE name = ? AND state = ?
+                """,
+                (state.value, name, current_state.value)
+            )
             await db.commit()
+
+            if cursor.rowcount == 0:
+                # Another coroutine moved the job between our read and our
+                # write.  Our transition was validated against a state that
+                # no longer holds, so it must not be applied.
+                raise InvalidTransitionError(name, current_state, state)
 
     def validate_transition(self, job_name: str, from_state: JobState, to_state: JobState) -> None:
         if from_state == to_state: return
@@ -182,20 +203,81 @@ class Persistence:
                     if state == JobState.BLOCKED_UNRESOLVABLE:
                         await self.update_job_state(name, JobState.WAITING)
 
-    async def get_next_queued_job(self) -> Optional[str]:
-        """Fetch the highest priority job that is currently QUEUED."""
+    async def claim_next_queued_job(
+        self, eligible: Optional[Set[str]] = None
+    ) -> Optional[str]:
+        """Atomically take the highest priority QUEUED job and mark it RUNNING.
+
+        Selection and claiming are a single UPDATE, so a job can be handed
+        out exactly once no matter how many callers race.  The scheduler
+        used to SELECT a name and dispatch it without marking it taken,
+        then loop again immediately, which re-selected the same row until
+        one of the dispatched tasks happened to transition it.
+
+        If `eligible` is given, only jobs with those names are considered.
+        The scheduler passes the registry snapshot so a job whose definition
+        has been removed is never claimed into RUNNING and then found to be
+        unrunnable.
+
+        Returns the claimed job name, or None if nothing was claimable.
+        """
+        if eligible is not None and not eligible:
+            return None
+
+        filter_sql = ""
+        params = [JobState.RUNNING.value, JobState.QUEUED.value]
+        if eligible is not None:
+            names = sorted(eligible)
+            filter_sql = f" AND name IN ({','.join('?' * len(names))})"
+            params.extend(names)
+        params.append(JobState.QUEUED.value)
+
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                '''
-                SELECT name FROM jobs
-                WHERE state = ?
-                ORDER BY current_priority DESC, created_at ASC
-                LIMIT 1
-                ''', (JobState.QUEUED.value,)
+                f'''
+                UPDATE jobs
+                SET state = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE name = (
+                    SELECT name FROM jobs
+                    WHERE state = ?{filter_sql}
+                    ORDER BY current_priority DESC, created_at ASC
+                    LIMIT 1
+                )
+                AND state = ?
+                RETURNING name
+                ''',
+                params
             ) as cursor:
                 row = await cursor.fetchone()
-                return row['name'] if row else None
+            await db.commit()
+            return row['name'] if row else None
+
+    async def block_queued_jobs_without_definitions(
+        self, eligible: Set[str]
+    ) -> List[str]:
+        """Move QUEUED jobs that no longer have a definition to blocked.
+
+        The dispatch loop refuses to claim these, so without this they
+        would sit in the queue indefinitely.
+
+        Returns the names that were blocked.
+        """
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT name FROM jobs WHERE state = ?", (JobState.QUEUED.value,)
+            ) as cursor:
+                queued = [row['name'] for row in await cursor.fetchall()]
+
+        orphaned = [name for name in queued if name not in eligible]
+        for name in orphaned:
+            try:
+                await self.update_job_state(name, JobState.BLOCKED_UNRESOLVABLE)
+            except InvalidTransitionError:
+                # It moved underneath us; the next pass will pick it up.
+                pass
+        return orphaned
 
     async def age_queued_priorities(self):
         """Increment priority of all queued jobs (priority aging)."""

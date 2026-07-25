@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Set
 from .models import JobDefinition, JobState
 from .definition_parser import DefinitionParser
 from .config import JOBS_DIR
@@ -82,3 +82,7 @@ class Registry:
 
     def get_all_jobs(self) -> Dict[str, JobDefinition]:
         return self.jobs.copy()
+
+    def known_job_names(self) -> Set[str]:
+        """Names currently backed by a definition, for dispatch eligibility."""
+        return set(self.jobs)

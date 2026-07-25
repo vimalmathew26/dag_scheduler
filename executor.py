@@ -36,16 +36,25 @@ class Executor:
         can trigger fan-out of downstream dependents."""
         self.scheduler = scheduler
 
+    def at_capacity(self) -> bool:
+        """True when every concurrency slot is taken.
+
+        The scheduler checks this before claiming, so it does not claim
+        work it cannot start.
+        """
+        return self.semaphore.locked()
+
     async def run_job(self, job_name: str, definition: JobDefinition, attempt: int = 1):
         """
         Executes a job within the concurrency limit and enforces a timeout.
+
+        The job is already in RUNNING when this is called: the scheduler
+        claims it atomically as part of selecting it.
         """
         async with self.semaphore:
             run_id = str(uuid.uuid4())
             start_time = time.strftime('%Y-%m-%d %H:%M:%S')
-            
-            await self.persistence.update_job_state(job_name, JobState.RUNNING)
-            
+
             job_run = JobRun(
                 job_name=job_name,
                 run_id=run_id,
