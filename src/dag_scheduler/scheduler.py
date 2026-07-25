@@ -74,7 +74,11 @@ class Scheduler:
                     await asyncio.sleep(self.busy_poll_interval)
                     continue
 
-                eligible = self.registry.known_job_names()
+                # One consistent snapshot per iteration, taken under the
+                # reload lock, so eligibility and the definition we dispatch
+                # come from the same view of the namespace.
+                snapshot = await self.registry.snapshot()
+                eligible = set(snapshot)
                 job_name = await self.persistence.claim_next_queued_job(eligible)
 
                 if job_name is None:
@@ -89,7 +93,7 @@ class Scheduler:
                     await asyncio.sleep(self.idle_poll_interval)
                     continue
 
-                definition = self.registry.get_job(job_name)
+                definition = snapshot.get(job_name)
                 if definition is None:
                     # Removed between the claim filter and this lookup.
                     logger.warning(

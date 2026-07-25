@@ -1,5 +1,7 @@
 """Registry reload and the added/removed/changed diff."""
 
+import asyncio
+
 import pytest
 
 from dag_scheduler.models import JobDefinition, JobState
@@ -136,3 +138,60 @@ class TestReloadDiff:
         second = await persistence.get_all_db_jobs()
 
         assert first == second
+
+
+class TestReloadConcurrency:
+    async def test_snapshot_is_never_half_applied(self, registry, persistence):
+        """A reader must not see the new namespace before the database
+        rows behind it have been reconciled."""
+        reg, d = registry
+        write(d, "a.yaml", "jobs:\n  x:\n    command: 'echo'\n")
+        await reg.load_initial()
+
+        observations = []
+
+        async def observe():
+            for _ in range(60):
+                snap = await reg.snapshot()
+                db = await persistence.get_all_db_jobs()
+                observations.append((set(snap), set(db)))
+                await asyncio.sleep(0.005)
+
+        watcher = asyncio.create_task(observe())
+        for i in range(6):
+            write(d, "b.yaml", f"jobs:\n  y{i}:\n    command: 'echo'\n")
+            await reg.reload()
+            await asyncio.sleep(0.01)
+        await watcher
+
+        for snap, db in observations:
+            assert snap <= db, (
+                f"registry advertised {snap - db} before the database had it"
+            )
+
+    async def test_concurrent_reloads_serialise(self, registry, persistence):
+        reg, d = registry
+        write(d, "a.yaml", "jobs:\n  x:\n    command: 'echo'\n")
+        await reg.load_initial()
+
+        await asyncio.gather(*(reg.reload() for _ in range(8)))
+
+        assert set(reg.jobs) == {"x"}
+        assert set(await persistence.get_all_db_jobs()) == {"x"}
+
+    async def test_parsing_does_not_block_the_event_loop(self, registry):
+        """Parsing is blocking file I/O and must run off the loop."""
+        reg, d = registry
+        for i in range(30):
+            write(d, f"f{i}.yaml", f"jobs:\n  j{i}:\n    command: 'echo'\n")
+
+        ticks = 0
+
+        async def heartbeat():
+            nonlocal ticks
+            for _ in range(20):
+                await asyncio.sleep(0.001)
+                ticks += 1
+
+        await asyncio.gather(reg.reload(), heartbeat())
+        assert ticks == 20

@@ -25,6 +25,9 @@ class FakeRegistry:
     def known_job_names(self):
         return set(self.jobs)
 
+    async def snapshot(self):
+        return dict(self.jobs)
+
 
 @pytest.fixture
 def scheduler(persistence):

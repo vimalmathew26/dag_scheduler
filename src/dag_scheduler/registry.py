@@ -38,25 +38,33 @@ class Registry:
                 raise
 
     async def reload(self):
+        """Reparse the jobs directory and reconcile the database.
+
+        Parsing happens outside the lock and off the event loop, because it
+        is blocking file I/O that used to stall the API and the scheduler
+        for its duration while holding the reload lock.
+
+        The snapshot swap and the database reconciliation then happen
+        together under the lock. They used to be separated: self.jobs was
+        replaced first and _handle_diff ran afterwards across a series of
+        awaits, so for that window the registry said one thing and the
+        database said another, and dispatch reads take no lock at all.
         """
-        Hot-reload job definitions. Atomic swap after validation.
-        Serializes concurrent reload events.
-        """
-        async with self._reload_lock:
-            parser = DefinitionParser()
-            try:
-                new_jobs = parser.parse_directory(self.jobs_dir)
-            except Exception as e:
+        parser = DefinitionParser()
+        try:
+            new_jobs = await asyncio.to_thread(parser.parse_directory, self.jobs_dir)
+        except Exception as e:
                 # The previous snapshot is kept if parsing blows up entirely.
                 # Note this is not a validation gate: parse_directory drops
                 # bad jobs and returns the rest rather than raising, so a
                 # partial result is a normal outcome, not a failure.
-                logger.error(f"Reload failed, keeping the previous snapshot: {e}")
-                raise
+            logger.error(f"Reload failed, keeping the previous snapshot: {e}")
+            raise
 
+        async with self._reload_lock:
             old_jobs = self.jobs
-            self.jobs = new_jobs
             await self._handle_diff(old_jobs, new_jobs)
+            self.jobs = new_jobs
 
     async def _handle_diff(self, old_jobs: Dict[str, JobDefinition], new_jobs: Dict[str, JobDefinition]):
         """
@@ -79,6 +87,16 @@ class Registry:
 
         # 3. Re-validate queued/waiting jobs against new graph (handles dependency graph changes)
         await self.persistence.revalidate_jobs(new_jobs)
+
+    async def snapshot(self) -> Dict[str, JobDefinition]:
+        """A consistent view of the namespace, taken under the reload lock.
+
+        The dispatch loop uses this so it cannot observe a half-applied
+        reload, where the in-memory namespace has changed but the database
+        rows behind it have not been reconciled yet.
+        """
+        async with self._reload_lock:
+            return dict(self.jobs)
 
     def get_job(self, name: str) -> Optional[JobDefinition]:
         return self.jobs.get(name)

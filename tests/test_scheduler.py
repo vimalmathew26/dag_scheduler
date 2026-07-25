@@ -24,6 +24,9 @@ class FakeRegistry:
     def known_job_names(self):
         return set(self.jobs)
 
+    async def snapshot(self):
+        return dict(self.jobs)
+
 
 class RecordingExecutor:
     """Stands in for the executor, recording dispatches."""
