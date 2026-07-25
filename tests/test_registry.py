@@ -4,7 +4,7 @@ import asyncio
 
 import pytest
 
-from dag_scheduler.models import JobDefinition, JobState
+from dag_scheduler.models import JobState
 from dag_scheduler.registry import Registry
 
 
@@ -113,9 +113,7 @@ class TestReloadDiff:
         await reg.reload()
 
         jobs = await persistence.get_all_db_jobs()
-        assert jobs["x"]["state"] is JobState.RUNNING, (
-            "a running job must be allowed to finish"
-        )
+        assert jobs["x"]["state"] is JobState.RUNNING, "a running job must be allowed to finish"
 
     async def test_known_job_names_tracks_the_snapshot(self, registry):
         reg, d = registry
@@ -165,9 +163,7 @@ class TestReloadConcurrency:
         await watcher
 
         for snap, db in observations:
-            assert snap <= db, (
-                f"registry advertised {snap - db} before the database had it"
-            )
+            assert snap <= db, f"registry advertised {snap - db} before the database had it"
 
     async def test_concurrent_reloads_serialise(self, registry, persistence):
         reg, d = registry

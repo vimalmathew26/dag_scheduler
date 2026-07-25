@@ -126,7 +126,7 @@ class TestFindCycle:
         jobs = graph(a=("b",), b=("c",), c=("a",))
         cycle = self._cycle_for(jobs)
         # dag.py walks depends_on, so cycle[i] depends on cycle[i + 1].
-        for current, nxt in zip(cycle, cycle[1:]):
+        for current, nxt in zip(cycle, cycle[1:], strict=False):
             assert nxt in jobs[current].depends_on
 
     def test_self_loop_path(self):

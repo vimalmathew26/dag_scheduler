@@ -1,48 +1,49 @@
 import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any, Coroutine, Dict, List, Optional, Set
+from collections.abc import Coroutine
+from typing import TYPE_CHECKING, Any, Optional
 
 if TYPE_CHECKING:
     from .executor import Executor
     from .persistence import Persistence
     from .registry import Registry
 
-from .config import MAX_CONCURRENT, PRIORITY_AGING_INTERVAL
-from .models import JobState, JobDefinition
 from . import metrics
+from .config import PRIORITY_AGING_INTERVAL
 from .dag import get_ready_jobs
+from .models import JobState
 
 logger = logging.getLogger(__name__)
 
 
-def _report_task_failure(task: 'asyncio.Task[Any]') -> None:
+def _report_task_failure(task: "asyncio.Task[Any]") -> None:
     """Log a background task's exception through the application logger."""
     if task.cancelled():
         return
     exc = task.exception()
     if exc is not None:
-        logger.error(
-            f"Background task {task.get_name()} failed: {exc!r}", exc_info=exc
-        )
+        logger.error(f"Background task {task.get_name()} failed: {exc!r}", exc_info=exc)
+
 
 class Scheduler:
     def __init__(
         self,
-        persistence: 'Persistence',
-        registry: 'Registry',
-        executor: Optional['Executor'],
+        persistence: "Persistence",
+        registry: "Registry",
+        executor: Optional["Executor"],
     ) -> None:
         self.persistence = persistence
         self.registry = registry
         self.executor = executor
-        self._loop_task: Optional['asyncio.Task[Any]'] = None
-        self._aging_task: Optional['asyncio.Task[Any]'] = None
-        self._dispatch_tasks: Set['asyncio.Task[Any]'] = set()
+        self._loop_task: asyncio.Task[Any] | None = None
+        self._aging_task: asyncio.Task[Any] | None = None
+        self._dispatch_tasks: set[asyncio.Task[Any]] = set()
         self.running = False
         self.idle_poll_interval = 1.0
         self.busy_poll_interval = 0.05
 
-    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> 'asyncio.Task[Any]':
+    def _spawn(self, coro: Coroutine[Any, Any, Any]) -> "asyncio.Task[Any]":
         """Dispatch a job, holding a reference and reporting failures.
 
         A bare create_task keeps no reference, so the task can be garbage
@@ -62,7 +63,7 @@ class Scheduler:
         self._aging_task = asyncio.create_task(self._aging_loop())
         logger.info("Scheduler started.")
 
-    def dispatch_tasks(self) -> List['asyncio.Task[Any]']:
+    def dispatch_tasks(self) -> list["asyncio.Task[Any]"]:
         """In-flight job tasks, so shutdown can wait for them to finalize."""
         return list(self._dispatch_tasks)
 
@@ -78,10 +79,8 @@ class Scheduler:
                 task.cancel()
         for task in (self._loop_task, self._aging_task):
             if task is not None:
-                try:
+                with contextlib.suppress(asyncio.CancelledError):
                     await task
-                except asyncio.CancelledError:
-                    pass
         logger.info("Scheduler stopped")
 
     async def _main_loop(self) -> None:
@@ -112,9 +111,7 @@ class Scheduler:
                 job_name = await self.persistence.claim_next_queued_job(eligible)
 
                 if job_name is None:
-                    blocked = await self.persistence.block_queued_jobs_without_definitions(
-                        eligible
-                    )
+                    blocked = await self.persistence.block_queued_jobs_without_definitions(eligible)
                     for name in blocked:
                         logger.warning(
                             f"Job '{name}' is queued but has no definition; "
@@ -126,18 +123,14 @@ class Scheduler:
                 definition = snapshot.get(job_name)
                 if definition is None:
                     # Removed between the claim filter and this lookup.
-                    logger.warning(
-                        f"Job '{job_name}' lost its definition during dispatch"
-                    )
+                    logger.warning(f"Job '{job_name}' lost its definition during dispatch")
                     await self.persistence.update_job_state(job_name, JobState.UNKNOWN)
                     continue
 
                 attempt = await self.persistence.get_job_attempt(job_name)
                 logger.info(f"Dispatching job '{job_name}' (attempt {attempt})")
                 metrics.increment("dag_dispatches_total")
-                self._spawn(
-                    self.executor.run_job(job_name, definition, attempt=attempt)
-                )
+                self._spawn(self.executor.run_job(job_name, definition, attempt=attempt))
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -145,9 +138,7 @@ class Scheduler:
                 logger.error(f"Error in scheduler main loop: {e}")
                 await asyncio.sleep(5)
 
-    async def enqueue_job(
-        self, job_name: str, bypass_deps: bool = False, attempt: int = 1
-    ) -> None:
+    async def enqueue_job(self, job_name: str, bypass_deps: bool = False, attempt: int = 1) -> None:
         """
         Explicitly move a job to QUEUED or WAITING.
         If bypass_deps=True, it goes straight to QUEUED.
@@ -164,10 +155,13 @@ class Scheduler:
         # If the job is in a terminal state, reset to DEFINED first so the
         # normal forward transition is legal.
         db_jobs = await self.persistence.get_all_db_jobs()
-        current_state = db_jobs.get(job_name, {}).get('state')
+        current_state = db_jobs.get(job_name, {}).get("state")
         terminal_states = {
-            JobState.DONE, JobState.FAILED, JobState.TIMED_OUT,
-            JobState.UNKNOWN, JobState.CANCELLED,
+            JobState.DONE,
+            JobState.FAILED,
+            JobState.TIMED_OUT,
+            JobState.UNKNOWN,
+            JobState.CANCELLED,
         }
         if current_state in terminal_states:
             await self.persistence.reset_job_state(job_name)
@@ -183,7 +177,7 @@ class Scheduler:
 
         # Check dependencies
         db_jobs = await self.persistence.get_all_db_jobs()
-        current_states = {name: info['state'] for name, info in db_jobs.items()}
+        current_states = {name: info["state"] for name, info in db_jobs.items()}
 
         ready = True
         for dep in definition.depends_on:
@@ -199,10 +193,11 @@ class Scheduler:
         Called when a job finishes (DONE). Unblocks dependents.
         """
         definition = self.registry.get_job(job_name)
-        if not definition: return
+        if not definition:
+            return
 
         db_jobs = await self.persistence.get_all_db_jobs()
-        current_states = {name: info['state'] for name, info in db_jobs.items()}
+        current_states = {name: info["state"] for name, info in db_jobs.items()}
 
         # registry.get_all_jobs() gives the full snapshot for dag fan-out
         jobs_snapshot = self.registry.get_all_jobs()

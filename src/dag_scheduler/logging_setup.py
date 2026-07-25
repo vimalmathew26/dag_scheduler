@@ -10,11 +10,14 @@ rather than something to grep out of prose.
 import json
 import logging
 import sys
-from typing import Any, Dict, MutableMapping, Optional, Tuple
+from collections.abc import MutableMapping
+from typing import Any
 
 # Attributes present on every LogRecord, so anything else was added by us.
 _STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
-    "message", "asctime", "taskName",
+    "message",
+    "asctime",
+    "taskName",
 }
 
 
@@ -22,7 +25,7 @@ class JsonFormatter(logging.Formatter):
     """One JSON object per line, including any adapter-supplied fields."""
 
     def format(self, record: logging.LogRecord) -> str:
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "timestamp": self.formatTime(record, "%Y-%m-%dT%H:%M:%S%z"),
             "level": record.levelname,
             "logger": record.name,
@@ -41,8 +44,8 @@ class JobLogAdapter(logging.LoggerAdapter):
 
     def process(
         self, msg: Any, kwargs: MutableMapping[str, Any]
-    ) -> Tuple[Any, MutableMapping[str, Any]]:
-        extra: Dict[str, Any] = dict(self.extra or {})
+    ) -> tuple[Any, MutableMapping[str, Any]]:
+        extra: dict[str, Any] = dict(self.extra or {})
         extra.update(kwargs.get("extra") or {})
         kwargs["extra"] = extra
         run_id = extra.get("run_id")
@@ -58,10 +61,10 @@ class JobLogAdapter(logging.LoggerAdapter):
 def for_run(
     logger: logging.Logger,
     job: str,
-    run_id: Optional[str] = None,
-    attempt: Optional[int] = None,
+    run_id: str | None = None,
+    attempt: int | None = None,
 ) -> JobLogAdapter:
-    extra: Dict[str, Any] = {"job": job}
+    extra: dict[str, Any] = {"job": job}
     if run_id is not None:
         extra["run_id"] = run_id
     if attempt is not None:

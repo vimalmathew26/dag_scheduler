@@ -1,39 +1,54 @@
 import asyncio
-import signal
+import contextlib
 import logging
+import signal
 import sys
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
+
 import uvicorn
+
+from .api import app, init_api
 from .config import (
     API_HOST,
     API_PORT,
+    API_TOKEN,
     DB_PATH,
     JOBS_DIR,
-    API_TOKEN,
     LOG_JSON,
     LOG_LEVEL,
     SHUTDOWN_TIMEOUT,
     ensure_directories,
 )
-from .persistence import Persistence
-from .registry import Registry
-from .log_store import LogStore
-from .process_manager import ProcessManager
 from .executor import Executor
-from .scheduler import Scheduler
 from .file_watcher import FileWatcher
-from .retry_engine import RetryEngine
-from .api import app, init_api
+from .log_store import LogStore
 from .logging_setup import configure_logging
+from .persistence import Persistence
+from .process_manager import ProcessManager
+from .registry import Registry
+from .retry_engine import RetryEngine
+from .scheduler import Scheduler
 
 configure_logging(LOG_LEVEL, json_output=LOG_JSON)
 logger = logging.getLogger("dag_scheduler.main")
 
+
+class _DaemonManagedServer(uvicorn.Server):
+    """A uvicorn Server that does not install its own signal handlers.
+
+    Uvicorn traps SIGINT and SIGTERM by default, which would race the
+    daemon's handlers. The daemon owns the shutdown sequence: it drains the
+    server, then kills job processes, then waits for in-flight runs to
+    record their outcome.
+    """
+
+    def install_signal_handlers(self) -> None:
+        return None
+
+
 class Daemon:
-    def __init__(
-        self, db_path: Optional[Path] = None, jobs_dir: Optional[Path] = None
-    ) -> None:
+    def __init__(self, db_path: Path | None = None, jobs_dir: Path | None = None) -> None:
         self.db_path = db_path or DB_PATH
         self.jobs_dir = jobs_dir or JOBS_DIR
         ensure_directories(self.db_path, self.jobs_dir)
@@ -53,11 +68,11 @@ class Daemon:
 
         self.file_watcher = FileWatcher(self.registry, self.jobs_dir)
 
-        self.api_server: Optional[uvicorn.Server] = None
-        self.api_task: Optional['asyncio.Task[Any]'] = None
+        self.api_server: uvicorn.Server | None = None
+        self.api_task: asyncio.Task[Any] | None = None
         self._shutting_down = False
 
-    async def shutdown(self, sig: Optional[signal.Signals] = None) -> None:
+    async def shutdown(self, sig: signal.Signals | None = None) -> None:
         """Stop cleanly: drain the API, kill jobs, let writes finish.
 
         The old sequence set a stop event and then cancelled every
@@ -90,7 +105,7 @@ class Daemon:
             if self.api_task is not None:
                 try:
                     await asyncio.wait_for(self.api_task, timeout=SHUTDOWN_TIMEOUT)
-                except (asyncio.TimeoutError, asyncio.CancelledError):
+                except (TimeoutError, asyncio.CancelledError):
                     self.api_task.cancel()
 
         # 4. Terminate running jobs, then give their tasks a moment to
@@ -126,7 +141,9 @@ class Daemon:
             # We continue even if initial load fails, so user can fix files later
 
         # 4. Initialize API dependencies
-        init_api(self.scheduler, self.registry, self.persistence, self.log_store, self.process_manager)
+        init_api(
+            self.scheduler, self.registry, self.persistence, self.log_store, self.process_manager
+        )
 
         # 5. Start Scheduler and File Watcher
         await self.scheduler.start()
@@ -134,10 +151,7 @@ class Daemon:
 
         # 6. Start API Server (Uvicorn)
         config = uvicorn.Config(app, host=API_HOST, port=API_PORT, log_level="info")
-        self.api_server = uvicorn.Server(config)
-        # Uvicorn installs its own signal handlers by default, which would
-        # race ours. The daemon owns the shutdown sequence.
-        setattr(self.api_server, 'install_signal_handlers', lambda: None)
+        self.api_server = _DaemonManagedServer(config)
         self.api_task = asyncio.create_task(self.api_server.serve())
 
         if API_TOKEN:
@@ -158,10 +172,12 @@ class Daemon:
         # Wait for stop event
         await self.stop_event.wait()
 
+
 async def main_async() -> None:
     daemon = Daemon()
 
     loop = asyncio.get_running_loop()
+
     def _handle_signal(received: signal.Signals) -> None:
         asyncio.create_task(daemon.shutdown(received))
 
@@ -176,11 +192,11 @@ async def main_async() -> None:
         logger.exception(f"Fatal error in daemon: {e}")
         sys.exit(1)
 
+
 def main() -> None:
-    try:
+    with contextlib.suppress(KeyboardInterrupt):
         asyncio.run(main_async())
-    except KeyboardInterrupt:
-        pass
+
 
 if __name__ == "__main__":
     main()

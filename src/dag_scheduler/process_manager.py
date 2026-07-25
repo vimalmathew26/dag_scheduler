@@ -1,25 +1,27 @@
 # process_manager.py - Tracks active subprocesses and handles 'unknown' state detection
 
 import asyncio
+import contextlib
 import logging
 import os
 import signal
-from typing import TYPE_CHECKING, Any, Dict, Optional, Set
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .persistence import Persistence
-from .models import JobState
 from .config import GRACEFUL_KILL_TIMEOUT
+from .models import JobState
 
 logger = logging.getLogger(__name__)
+
 
 class ProcessManager:
     """Tracks live subprocess handles and manages crash recovery state transitions."""
 
-    def __init__(self, persistence: 'Persistence') -> None:
+    def __init__(self, persistence: "Persistence") -> None:
         self.persistence = persistence
-        self.processes: Dict[str, asyncio.subprocess.Process] = {}  # run_id -> process
-        self.job_to_run: Dict[str, str] = {}  # job_name -> current run_id
+        self.processes: dict[str, asyncio.subprocess.Process] = {}  # run_id -> process
+        self.job_to_run: dict[str, str] = {}  # job_name -> current run_id
         self._lock = asyncio.Lock()
 
     async def register_process(
@@ -37,7 +39,7 @@ class ProcessManager:
             # Clean up reverse mapping
             self.job_to_run = {k: v for k, v in self.job_to_run.items() if v != run_id}
 
-    async def get_process(self, job_run_id: str) -> Optional[asyncio.subprocess.Process]:
+    async def get_process(self, job_run_id: str) -> asyncio.subprocess.Process | None:
         """Get a registered subprocess by job_run_id."""
         async with self._lock:
             return self.processes.get(job_run_id)
@@ -51,9 +53,9 @@ class ProcessManager:
         logger.info("Starting crash recovery process detection")
         db_jobs = await self.persistence.get_all_db_jobs()
 
-        unknown_jobs: Set[str] = set()
+        unknown_jobs: set[str] = set()
         for job_name, info in db_jobs.items():
-            if info['state'] == JobState.RUNNING:
+            if info["state"] == JobState.RUNNING:
                 # No live process exists after restart — mark as unknown
                 unknown_jobs.add(job_name)
 
@@ -69,16 +71,14 @@ class ProcessManager:
         # forever and permanently understating the pass rate in /stats.
         orphaned_runs = await self.persistence.finalize_orphaned_runs()
         if orphaned_runs:
-            logger.warning(
-                f"Finalized {orphaned_runs} orphaned job run(s) as unknown"
-            )
+            logger.warning(f"Finalized {orphaned_runs} orphaned job run(s) as unknown")
 
         logger.info(
             f"Crash recovery completed. Marked {len(unknown_jobs)} jobs and "
             f"{orphaned_runs} run(s) as unknown."
         )
 
-    async def terminate(self, process: asyncio.subprocess.Process) -> Optional[int]:
+    async def terminate(self, process: asyncio.subprocess.Process) -> int | None:
         """Kill a job: SIGTERM the process group, then SIGKILL if needed.
 
         A job command runs under a shell, so the direct child is usually
@@ -112,15 +112,11 @@ class ProcessManager:
     @staticmethod
     def _signal_group(process: asyncio.subprocess.Process, sig: int) -> None:
         """Signal the process group, falling back to the direct child."""
-        try:
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
             os.killpg(os.getpgid(process.pid), sig)
             return
-        except (ProcessLookupError, PermissionError, OSError):
-            pass
-        try:
+        with contextlib.suppress(ProcessLookupError, OSError):
             process.send_signal(sig)
-        except (ProcessLookupError, OSError):
-            pass
 
     async def terminate_all(self) -> int:
         """Terminate every tracked process. Used on shutdown.

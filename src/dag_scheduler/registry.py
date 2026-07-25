@@ -1,15 +1,16 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Dict, Optional, Set
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .persistence import Persistence
-from .models import JobDefinition, JobState
-from .definition_parser import DefinitionParser
 from .config import JOBS_DIR
+from .definition_parser import DefinitionParser
+from .models import JobDefinition
 
 logger = logging.getLogger(__name__)
+
 
 class Registry:
     """
@@ -17,12 +18,10 @@ class Registry:
     diffing definitions, and transitioning removed jobs.
     """
 
-    def __init__(
-        self, persistence: 'Persistence', jobs_dir: Optional[Path] = None
-    ) -> None:
+    def __init__(self, persistence: "Persistence", jobs_dir: Path | None = None) -> None:
         self.persistence = persistence
         self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else JOBS_DIR
-        self.jobs: Dict[str, JobDefinition] = {}
+        self.jobs: dict[str, JobDefinition] = {}
         self._reload_lock = asyncio.Lock()
 
     async def load_initial(self) -> None:
@@ -59,10 +58,10 @@ class Registry:
         try:
             new_jobs = await asyncio.to_thread(parser.parse_directory, self.jobs_dir)
         except Exception as e:
-                # The previous snapshot is kept if parsing blows up entirely.
-                # Note this is not a validation gate: parse_directory drops
-                # bad jobs and returns the rest rather than raising, so a
-                # partial result is a normal outcome, not a failure.
+            # The previous snapshot is kept if parsing blows up entirely.
+            # Note this is not a validation gate: parse_directory drops
+            # bad jobs and returns the rest rather than raising, so a
+            # partial result is a normal outcome, not a failure.
             logger.error(f"Reload failed, keeping the previous snapshot: {e}")
             raise
 
@@ -73,8 +72,8 @@ class Registry:
 
     async def _handle_diff(
         self,
-        old_jobs: Dict[str, JobDefinition],
-        new_jobs: Dict[str, JobDefinition],
+        old_jobs: dict[str, JobDefinition],
+        new_jobs: dict[str, JobDefinition],
     ) -> None:
         """
         Diffs old vs new snapshot and handles removed/changed jobs.
@@ -82,7 +81,8 @@ class Registry:
         removed_names = set(old_jobs.keys()) - set(new_jobs.keys())
         added_names = set(new_jobs.keys()) - set(old_jobs.keys())
         changed_names = {
-            name for name in set(old_jobs.keys()) & set(new_jobs.keys())
+            name
+            for name in set(old_jobs.keys()) & set(new_jobs.keys())
             if old_jobs[name] != new_jobs[name]
         }
 
@@ -91,13 +91,13 @@ class Registry:
             await self.persistence.handle_removed_job(name)
 
         # 2. Sync New/Changed to Persistence
-        for name in (added_names | changed_names):
+        for name in added_names | changed_names:
             await self.persistence.upsert_job(name, new_jobs[name])
 
         # 3. Re-validate queued/waiting jobs against new graph (handles dependency graph changes)
         await self.persistence.revalidate_jobs(new_jobs)
 
-    async def snapshot(self) -> Dict[str, JobDefinition]:
+    async def snapshot(self) -> dict[str, JobDefinition]:
         """A consistent view of the namespace, taken under the reload lock.
 
         The dispatch loop uses this so it cannot observe a half-applied
@@ -107,12 +107,12 @@ class Registry:
         async with self._reload_lock:
             return dict(self.jobs)
 
-    def get_job(self, name: str) -> Optional[JobDefinition]:
+    def get_job(self, name: str) -> JobDefinition | None:
         return self.jobs.get(name)
 
-    def get_all_jobs(self) -> Dict[str, JobDefinition]:
+    def get_all_jobs(self) -> dict[str, JobDefinition]:
         return self.jobs.copy()
 
-    def known_job_names(self) -> Set[str]:
+    def known_job_names(self) -> set[str]:
         """Names currently backed by a definition, for dispatch eligibility."""
         return set(self.jobs)

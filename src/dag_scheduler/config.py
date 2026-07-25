@@ -14,7 +14,6 @@ copy meant the same five numbers were written down in three places.
 
 import os
 from pathlib import Path
-from typing import Optional
 
 # --------------------------------------------------------------------------
 # Environment-overridable: these change per machine and per deployment.
@@ -45,35 +44,33 @@ def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.environ.get(name)
     if raw is None:
         return default
-    return raw.strip().lower() in ('1', 'true', 'yes', 'on')
+    return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
 # Paths
-BASE_DIR = Path(
-    os.environ.get('XDG_DATA_HOME', Path.home() / '.local/share')
-) / 'dag_scheduler'
+BASE_DIR = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "dag_scheduler"
 
-DB_PATH = Path(os.environ.get('DAG_SCHEDULER_DB', BASE_DIR / 'scheduler.db'))
+DB_PATH = Path(os.environ.get("DAG_SCHEDULER_DB", BASE_DIR / "scheduler.db"))
 
 # Job definitions belong to the operator, not to the installed package. This
 # used to resolve inside the package directory, so after a pip install
 # `dag-scheduler load` wrote user files into site-packages.
-JOBS_DIR = Path(os.environ.get('DAG_SCHEDULER_JOBS_DIR', Path.cwd() / 'jobs'))
+JOBS_DIR = Path(os.environ.get("DAG_SCHEDULER_JOBS_DIR", Path.cwd() / "jobs"))
 
 # Execution
-MAX_CONCURRENT = _env_int('DAG_SCHEDULER_MAX_CONCURRENT', 4)
+MAX_CONCURRENT = _env_int("DAG_SCHEDULER_MAX_CONCURRENT", 4)
 
 # API
-API_HOST = os.environ.get('DAG_SCHEDULER_HOST', '127.0.0.1')
-API_PORT = _env_int('DAG_SCHEDULER_PORT', 8000)
-API_TOKEN: Optional[str] = os.environ.get('DAG_SCHEDULER_TOKEN') or None
+API_HOST = os.environ.get("DAG_SCHEDULER_HOST", "127.0.0.1")
+API_PORT = _env_int("DAG_SCHEDULER_PORT", 8000)
+API_TOKEN: str | None = os.environ.get("DAG_SCHEDULER_TOKEN") or None
 
 # Scheduler
-PRIORITY_AGING_INTERVAL = _env_float('DAG_SCHEDULER_AGING_INTERVAL', 60.0)
+PRIORITY_AGING_INTERVAL = _env_float("DAG_SCHEDULER_AGING_INTERVAL", 60.0)
 
 # Logging
-LOG_LEVEL = os.environ.get('DAG_SCHEDULER_LOG_LEVEL', 'INFO')
-LOG_JSON = _env_bool('DAG_SCHEDULER_LOG_JSON')
+LOG_LEVEL = os.environ.get("DAG_SCHEDULER_LOG_LEVEL", "INFO")
+LOG_JSON = _env_bool("DAG_SCHEDULER_LOG_JSON")
 
 # --------------------------------------------------------------------------
 # Constants: properties of the design, not of a deployment. Nobody needs to
@@ -87,8 +84,8 @@ LOG_FLUSH_INTERVAL = 0.5  # seconds before a partial log buffer is written
 
 
 def ensure_directories(
-    db_path: Optional[Path] = None,
-    jobs_dir: Optional[Path] = None,
+    db_path: Path | None = None,
+    jobs_dir: Path | None = None,
 ) -> None:
     """Create the directories the daemon needs.
 

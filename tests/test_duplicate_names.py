@@ -11,8 +11,6 @@ DECISION 1: reject every definition of a colliding name, do not pick a
 winner, and let every other job in every affected file survive.
 """
 
-import pytest
-
 from dag_scheduler.definition_parser import DefinitionParser
 
 
@@ -27,24 +25,18 @@ class TestDuplicateNames:
 
         jobs = DefinitionParser().parse_directory(tmp_path)
 
-        assert "shared" not in jobs, (
-            "a colliding name must not resolve to either definition"
-        )
+        assert "shared" not in jobs, "a colliding name must not resolve to either definition"
 
     def test_unrelated_jobs_in_both_files_survive(self, tmp_path):
         write(
             tmp_path,
             "a.yaml",
-            "jobs:\n"
-            "  shared:\n    command: 'echo a'\n"
-            "  only_in_a:\n    command: 'echo a2'\n",
+            "jobs:\n  shared:\n    command: 'echo a'\n  only_in_a:\n    command: 'echo a2'\n",
         )
         write(
             tmp_path,
             "b.yaml",
-            "jobs:\n"
-            "  shared:\n    command: 'echo b'\n"
-            "  only_in_b:\n    command: 'echo b2'\n",
+            "jobs:\n  shared:\n    command: 'echo b'\n  only_in_b:\n    command: 'echo b2'\n",
         )
 
         jobs = DefinitionParser().parse_directory(tmp_path)
@@ -97,15 +89,12 @@ class TestDuplicateNames:
         write(
             tmp_path,
             "c.yaml",
-            "jobs:\n  downstream:\n    command: 'echo c'\n"
-            "    depends_on: ['shared']\n",
+            "jobs:\n  downstream:\n    command: 'echo c'\n    depends_on: ['shared']\n",
         )
 
         jobs = DefinitionParser().parse_directory(tmp_path)
 
-        assert "downstream" not in jobs, (
-            "a job depending on an unresolvable name must not load"
-        )
+        assert "downstream" not in jobs, "a job depending on an unresolvable name must not load"
 
     def test_no_collision_means_nothing_changes(self, tmp_path):
         write(tmp_path, "a.yaml", "jobs:\n  one:\n    command: 'echo a'\n")

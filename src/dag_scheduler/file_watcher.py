@@ -1,30 +1,33 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Any, Dict, Optional, Set
-from watchdog.observers import Observer
+from typing import Any
+
 from watchdog.events import FileSystemEventHandler
+from watchdog.observers import Observer
+
 from . import metrics
 from .config import JOBS_DIR
 
 logger = logging.getLogger(__name__)
 
+
 class FileWatcher:
     def __init__(
         self,
         registry: Any,
-        jobs_dir: Optional[Path] = None,
+        jobs_dir: Path | None = None,
         debounce_delay: float = 0.5,
     ) -> None:
         self.registry = registry
         self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else JOBS_DIR
         self.debounce_delay = debounce_delay
-        self.event_queue: 'asyncio.Queue[Any]' = asyncio.Queue()
+        self.event_queue: asyncio.Queue[Any] = asyncio.Queue()
         self._observer = Observer()
         self._handler = _FileSystemHandler(self.event_queue)
-        self._watched_dirs: Set[Path] = set()
-        self._debounce_tasks: Dict[Path, 'asyncio.Task[Any]'] = {}
-        self._loop: Optional[Any] = None
+        self._watched_dirs: set[Path] = set()
+        self._debounce_tasks: dict[Path, asyncio.Task[Any]] = {}
+        self._loop: Any | None = None
 
     async def start(self) -> None:
         """Start watching job definition directories."""
@@ -69,7 +72,7 @@ class FileWatcher:
         src_path = Path(event.src_path)
 
         # Filter for YAML/TOML files
-        if src_path.suffix not in ['.yaml', '.yml', '.toml']:
+        if src_path.suffix not in [".yaml", ".yml", ".toml"]:
             return
 
         # Cancel any existing debounce task for this file
@@ -108,25 +111,22 @@ class FileWatcher:
 class _FileSystemHandler(FileSystemEventHandler):
     """Internal handler for file system events."""
 
-    def __init__(self, event_queue: 'asyncio.Queue[Any]') -> None:
+    def __init__(self, event_queue: "asyncio.Queue[Any]") -> None:
         self.event_queue = event_queue
-        self._loop: Optional[Any] = None
+        self._loop: Any | None = None
 
     def set_loop(self, loop: Any) -> None:
         """Set the asyncio event loop for thread-safe operations."""
         self._loop = loop
 
     def on_modified(self, event: Any) -> None:
-        if not event.is_directory:
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
+        if not event.is_directory and self._loop is not None:
+            self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
 
     def on_created(self, event: Any) -> None:
-        if not event.is_directory:
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
+        if not event.is_directory and self._loop is not None:
+            self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
 
     def on_deleted(self, event: Any) -> None:
-        if not event.is_directory:
-            if self._loop is not None:
-                self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)
+        if not event.is_directory and self._loop is not None:
+            self._loop.call_soon_threadsafe(self.event_queue.put_nowait, event)

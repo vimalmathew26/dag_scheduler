@@ -101,8 +101,13 @@ class TestReadEndpoints:
         await seed(persistence, "a")
         for i, ts in enumerate(["2026-01-01 00:00:00", "2026-01-02 00:00:00"]):
             await persistence.record_run(
-                JobRun(job_name="a", run_id=f"r{i}", state=JobState.RUNNING,
-                       start_time=ts, attempt=i + 1)
+                JobRun(
+                    job_name="a",
+                    run_id=f"r{i}",
+                    state=JobState.RUNNING,
+                    start_time=ts,
+                    attempt=i + 1,
+                )
             )
         r = await client.get("/jobs/a/runs")
         assert [run["run_id"] for run in r.json()] == ["r1", "r0"]
@@ -122,8 +127,12 @@ class TestStats:
         await seed(persistence, "a")
         for i, state in enumerate([JobState.DONE, JobState.DONE, JobState.FAILED]):
             await persistence.record_run(
-                JobRun(job_name="a", run_id=f"r{i}", state=JobState.RUNNING,
-                       start_time="2026-01-01 00:00:00")
+                JobRun(
+                    job_name="a",
+                    run_id=f"r{i}",
+                    state=JobState.RUNNING,
+                    start_time="2026-01-01 00:00:00",
+                )
             )
             await persistence.finalize_run(f"r{i}", state, 0)
 
@@ -162,9 +171,7 @@ class TestCancel:
         r = await client.post("/jobs/a/cancel")
         assert r.status_code == 400
 
-    async def test_cancelling_a_queued_job_records_a_null_exit_code(
-        self, client, persistence
-    ):
+    async def test_cancelling_a_queued_job_records_a_null_exit_code(self, client, persistence):
         await seed(persistence, "a")
         await persistence.update_job_state("a", JobState.QUEUED)
 

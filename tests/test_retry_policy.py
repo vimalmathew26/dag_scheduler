@@ -24,9 +24,7 @@ def definition(**policy) -> JobDefinition:
 
 
 def run(attempt: int) -> JobRun:
-    return JobRun(
-        job_name="j", run_id="r", state=JobState.FAILED, attempt=attempt
-    )
+    return JobRun(job_name="j", run_id="r", state=JobState.FAILED, attempt=attempt)
 
 
 class TestShouldRetry:
@@ -41,9 +39,7 @@ class TestShouldRetry:
             (1, 0, False),
         ],
     )
-    def test_attempt_against_max_attempts(
-        self, engine, attempt, max_attempts, expected
-    ):
+    def test_attempt_against_max_attempts(self, engine, attempt, max_attempts, expected):
         d = definition(max_attempts=max_attempts, retry_on_exit_codes=[1])
         assert engine.should_retry(d, run(attempt), 1) is expected
 

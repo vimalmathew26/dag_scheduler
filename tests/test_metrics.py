@@ -37,8 +37,11 @@ class Reg:
 @pytest.fixture
 async def client(persistence):
     init_api(
-        Scheduler(persistence, Reg(), None), Reg(), persistence,
-        LogStore(persistence.db_path), ProcessManager(persistence),
+        Scheduler(persistence, Reg(), None),
+        Reg(),
+        persistence,
+        LogStore(persistence.db_path),
+        ProcessManager(persistence),
     )
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://t") as c:
@@ -49,8 +52,11 @@ class TestRendering:
     def test_declared_series_appear_even_at_zero(self):
         body = metrics.render()
         for name in [
-            "dag_dispatches_total", "dag_runs_total", "dag_retries_total",
-            "dag_reload_failures_total", "dag_scheduler_loop_errors_total",
+            "dag_dispatches_total",
+            "dag_runs_total",
+            "dag_retries_total",
+            "dag_reload_failures_total",
+            "dag_scheduler_loop_errors_total",
         ]:
             assert f"# TYPE {name}" in body
             assert f"{name} 0.0" in body or f"{name}{{" in body
@@ -71,7 +77,7 @@ class TestRendering:
     def test_help_and_type_precede_every_series(self):
         metrics.increment("dag_retries_total")
         lines = metrics.render().splitlines()
-        i = next(i for i, l in enumerate(lines) if l.startswith("dag_retries_total "))
+        i = next(i for i, line in enumerate(lines) if line.startswith("dag_retries_total "))
         assert lines[i - 1].startswith("# TYPE dag_retries_total")
         assert lines[i - 2].startswith("# HELP dag_retries_total")
 
@@ -84,7 +90,9 @@ class TestEndpoint:
 
     async def test_gauges_reflect_the_database(self, client, persistence):
         for name, state in [
-            ("q1", JobState.QUEUED), ("q2", JobState.QUEUED), ("r1", JobState.RUNNING)
+            ("q1", JobState.QUEUED),
+            ("q2", JobState.QUEUED),
+            ("r1", JobState.RUNNING),
         ]:
             await persistence.upsert_job(name, JobDefinition(command="true"))
             await persistence.update_job_state(name, JobState.QUEUED)
@@ -109,9 +117,7 @@ class TestInstrumentation:
     async def test_a_run_increments_the_outcome_counter(self, persistence, tmp_path):
         from dag_scheduler.executor import Executor
 
-        executor = Executor(
-            persistence, ProcessManager(persistence), LogStore(tmp_path / "t.db")
-        )
+        executor = Executor(persistence, ProcessManager(persistence), LogStore(tmp_path / "t.db"))
         definition = JobDefinition(command="exit 0", timeout=10)
         await persistence.upsert_job("j", definition)
         await persistence.update_job_state("j", JobState.QUEUED)

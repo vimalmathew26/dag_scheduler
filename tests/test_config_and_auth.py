@@ -33,9 +33,7 @@ class TestEnvironmentOverrides:
         assert cfg.MAX_CONCURRENT == 4
 
     def test_host_and_port(self, monkeypatch):
-        cfg = reload_config(
-            monkeypatch, DAG_SCHEDULER_HOST="0.0.0.0", DAG_SCHEDULER_PORT="9999"
-        )
+        cfg = reload_config(monkeypatch, DAG_SCHEDULER_HOST="0.0.0.0", DAG_SCHEDULER_PORT="9999")
         assert (cfg.API_HOST, cfg.API_PORT) == ("0.0.0.0", 9999)
 
     def test_paths(self, monkeypatch, tmp_path):
@@ -44,13 +42,21 @@ class TestEnvironmentOverrides:
             DAG_SCHEDULER_DB=str(tmp_path / "x.db"),
             DAG_SCHEDULER_JOBS_DIR=str(tmp_path / "defs"),
         )
-        assert cfg.DB_PATH == tmp_path / "x.db"
-        assert cfg.JOBS_DIR == tmp_path / "defs"
+        assert tmp_path / "x.db" == cfg.DB_PATH
+        assert tmp_path / "defs" == cfg.JOBS_DIR
 
-    @pytest.mark.parametrize("raw,expected", [
-        ("1", True), ("true", True), ("YES", True), ("on", True),
-        ("0", False), ("false", False), ("", False),
-    ])
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1", True),
+            ("true", True),
+            ("YES", True),
+            ("on", True),
+            ("0", False),
+            ("false", False),
+            ("", False),
+        ],
+    )
     def test_boolean_parsing(self, monkeypatch, raw, expected):
         cfg = reload_config(monkeypatch, DAG_SCHEDULER_LOG_JSON=raw)
         assert cfg.LOG_JSON is expected
@@ -69,8 +75,11 @@ class TestRetryDefaultsHaveOneHome:
     def test_config_no_longer_duplicates_the_model(self):
         """The same five numbers used to be written down three times."""
         for name in [
-            "DEFAULT_RETRY", "DEFAULT_BACKOFF_BASE", "DEFAULT_JITTER",
-            "DEFAULT_RETRY_ON_EXIT_CODES", "DEFAULT_TIMEOUT",
+            "DEFAULT_RETRY",
+            "DEFAULT_BACKOFF_BASE",
+            "DEFAULT_JITTER",
+            "DEFAULT_RETRY_ON_EXIT_CODES",
+            "DEFAULT_TIMEOUT",
         ]:
             assert not hasattr(config_module, name), (
                 f"{name} is back in config; RetryPolicy owns these"
@@ -100,6 +109,7 @@ class TestTokenGate:
         # hold the original object, so init_api configures one app and the
         # client exercises another.
         import dag_scheduler.api as api_module
+
         monkeypatch.setattr(api_module, "API_TOKEN", token)
 
         from dag_scheduler.log_store import LogStore
@@ -122,28 +132,37 @@ class TestTokenGate:
                 return dict(self.jobs)
 
         api_module.init_api(
-            Scheduler(persistence, Reg(), None), Reg(), persistence,
-            LogStore(persistence.db_path), ProcessManager(persistence),
+            Scheduler(persistence, Reg(), None),
+            Reg(),
+            persistence,
+            LogStore(persistence.db_path),
+            ProcessManager(persistence),
         )
         return api_module
 
-    @pytest.mark.parametrize("path", [
-        "/jobs/x/trigger", "/jobs/x/cancel", "/jobs/x/reset",
-    ])
-    async def test_mutating_routes_reject_a_missing_token(
-        self, persistence, path, monkeypatch
-    ):
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/jobs/x/trigger",
+            "/jobs/x/cancel",
+            "/jobs/x/reset",
+        ],
+    )
+    async def test_mutating_routes_reject_a_missing_token(self, persistence, path, monkeypatch):
         api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             assert (await c.post(path)).status_code == 401
 
-    @pytest.mark.parametrize("path", [
-        "/jobs/x/trigger", "/jobs/x/cancel", "/jobs/x/reset",
-    ])
-    async def test_mutating_routes_reject_a_wrong_token(
-        self, persistence, path, monkeypatch
-    ):
+    @pytest.mark.parametrize(
+        "path",
+        [
+            "/jobs/x/trigger",
+            "/jobs/x/cancel",
+            "/jobs/x/reset",
+        ],
+    )
+    async def test_mutating_routes_reject_a_wrong_token(self, persistence, path, monkeypatch):
         api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
@@ -154,9 +173,7 @@ class TestTokenGate:
         api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
-            r = await c.post(
-                "/jobs/x/trigger", headers={"Authorization": "Bearer s3cret"}
-            )
+            r = await c.post("/jobs/x/trigger", headers={"Authorization": "Bearer s3cret"})
             # 404 because the job does not exist: past the gate, which is
             # what is being asserted.
             assert r.status_code == 404

@@ -13,7 +13,6 @@ process group.
 
 import asyncio
 import os
-import signal
 
 import pytest
 
@@ -121,28 +120,20 @@ class TestTimeoutKillsTheProcess:
             asyncio.create_subprocess_shell = original
         return seen["members"]
 
-    async def test_whole_process_group_is_dead_after_timeout(
-        self, executor, persistence
-    ):
+    async def test_whole_process_group_is_dead_after_timeout(self, executor, persistence):
         """The regression test for the orphans seen in production.
 
         `sh -c "sleep 30"` leaves a `sleep` grandchild. Signalling only the
         direct child orphans it, which is what the before-state showed: both
         `/bin/sh -c sleep 30` and `sleep 30` outlived the daemon.
         """
-        members = await self._run_and_collect_group(
-            executor, persistence, "slow", "sleep 30"
-        )
-        assert len(members) >= 2, (
-            f"expected a shell and a grandchild, saw {members}"
-        )
+        members = await self._run_and_collect_group(executor, persistence, "slow", "sleep 30")
+        assert len(members) >= 2, f"expected a shell and a grandchild, saw {members}"
         await asyncio.sleep(0.5)
         survivors = {pid for pid in members if alive(pid)}
         assert not survivors, f"orphaned processes survived the timeout: {survivors}"
 
-    async def test_process_ignoring_sigterm_is_sigkilled(
-        self, executor, persistence, monkeypatch
-    ):
+    async def test_process_ignoring_sigterm_is_sigkilled(self, executor, persistence, monkeypatch):
         """Exercises the SIGKILL escalation, which had never executed."""
         monkeypatch.setattr("dag_scheduler.process_manager.GRACEFUL_KILL_TIMEOUT", 1)
         members = await self._run_and_collect_group(
@@ -150,9 +141,7 @@ class TestTimeoutKillsTheProcess:
         )
         await asyncio.sleep(0.5)
         survivors = {pid for pid in members if alive(pid)}
-        assert not survivors, (
-            f"processes ignoring SIGTERM were never SIGKILLed: {survivors}"
-        )
+        assert not survivors, f"processes ignoring SIGTERM were never SIGKILLed: {survivors}"
 
     async def test_normal_completion_is_unaffected(self, executor, persistence):
         await run(executor, persistence, "quick", "echo hello", timeout=10)

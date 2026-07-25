@@ -12,8 +12,6 @@ no dependencies has no precondition; a job whose dependency vanished has an
 unknowable one, and those must not be the same state.
 """
 
-import pytest
-
 from dag_scheduler.dag import get_ready_jobs, topological_sort
 from dag_scheduler.models import JobDefinition, JobState
 
@@ -52,9 +50,7 @@ class TestGetReadyJobsWithMissingDependency:
 class TestComponentsAgree:
     """Both paths must reach the same conclusion about the same job."""
 
-    async def test_dag_and_revalidate_agree_a_missing_parent_blocks(
-        self, persistence
-    ):
+    async def test_dag_and_revalidate_agree_a_missing_parent_blocks(self, persistence):
         await persistence.upsert_job("child", job("gone"))
         await persistence.update_job_state("child", JobState.WAITING)
 
@@ -68,9 +64,7 @@ class TestComponentsAgree:
         jobs = await persistence.get_all_db_jobs()
         assert jobs["child"]["state"] is JobState.BLOCKED_UNRESOLVABLE
 
-    async def test_removed_dependency_leaves_the_dependent_blocked_not_deleted(
-        self, persistence
-    ):
+    async def test_removed_dependency_leaves_the_dependent_blocked_not_deleted(self, persistence):
         """A waiting job whose definition disappears is blocked, not erased."""
         await persistence.upsert_job("child", job("parent"))
         await persistence.update_job_state("child", JobState.WAITING)

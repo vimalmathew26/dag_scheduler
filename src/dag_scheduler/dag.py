@@ -1,15 +1,17 @@
-from typing import List, Set, Dict, Tuple
 from collections import deque
+
 from .models import JobDefinition, JobState
+
 
 class CycleError(Exception):
     """Raised when a cycle is detected in the dependency graph."""
-    def __init__(self, cycle: List[str]) -> None:
+
+    def __init__(self, cycle: list[str]) -> None:
         self.cycle = cycle
         super().__init__(f"Cycle detected: {' -> '.join(cycle)}")
 
 
-def topological_sort(jobs: Dict[str, JobDefinition]) -> List[str]:
+def topological_sort(jobs: dict[str, JobDefinition]) -> list[str]:
     """
     Perform topological sort using Kahn's algorithm.
 
@@ -23,8 +25,8 @@ def topological_sort(jobs: Dict[str, JobDefinition]) -> List[str]:
         CycleError: If a cycle is detected in the dependency graph
     """
     # Build adjacency list and in-degree count
-    adj: Dict[str, Set[str]] = {name: set() for name in jobs}
-    in_degree: Dict[str, int] = {name: 0 for name in jobs}
+    adj: dict[str, set[str]] = {name: set() for name in jobs}
+    in_degree: dict[str, int] = dict.fromkeys(jobs, 0)
 
     # Populate adjacency list and in-degrees
     for name, job in jobs.items():
@@ -35,8 +37,8 @@ def topological_sort(jobs: Dict[str, JobDefinition]) -> List[str]:
 
     # Initialize queue with nodes having zero in-degree
     queue: deque = deque([name for name, degree in in_degree.items() if degree == 0])
-    result: List[str] = []
-    visited: Set[str] = set()
+    result: list[str] = []
+    visited: set[str] = set()
 
     while queue:
         current = queue.popleft()
@@ -61,13 +63,13 @@ def topological_sort(jobs: Dict[str, JobDefinition]) -> List[str]:
     return result
 
 
-def _find_cycle(jobs: Dict[str, JobDefinition], start_node: str) -> List[str]:
+def _find_cycle(jobs: dict[str, JobDefinition], start_node: str) -> list[str]:
     """Helper function to find a cycle using DFS."""
-    visited: Set[str] = set()
-    rec_stack: Set[str] = set()
-    path: List[str] = []
+    visited: set[str] = set()
+    rec_stack: set[str] = set()
+    path: list[str] = []
 
-    def dfs(node: str) -> List[str] | None:
+    def dfs(node: str) -> list[str] | None:
         visited.add(node)
         rec_stack.add(node)
         path.append(node)
@@ -91,7 +93,7 @@ def _find_cycle(jobs: Dict[str, JobDefinition], start_node: str) -> List[str]:
     return dfs(start_node) or []
 
 
-def get_dependents(job_name: str, jobs: Dict[str, JobDefinition]) -> Set[str]:
+def get_dependents(job_name: str, jobs: dict[str, JobDefinition]) -> set[str]:
     """
     Get all jobs that depend on the given job.
 
@@ -109,8 +111,9 @@ def get_dependents(job_name: str, jobs: Dict[str, JobDefinition]) -> Set[str]:
     return dependents
 
 
-def get_ready_jobs(completed_job: str, jobs: Dict[str, JobDefinition],
-                   current_states: Dict[str, JobState]) -> List[str]:
+def get_ready_jobs(
+    completed_job: str, jobs: dict[str, JobDefinition], current_states: dict[str, JobState]
+) -> list[str]:
     """
     Get jobs that are now ready to run because their dependencies are satisfied.
 

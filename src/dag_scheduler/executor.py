@@ -1,21 +1,21 @@
 import asyncio
+import contextlib
 import logging
 import time
 import uuid
-from typing import TYPE_CHECKING, List, Optional, Tuple
+from typing import TYPE_CHECKING
 
 from . import metrics
 from .config import (
-    GRACEFUL_KILL_TIMEOUT,
     LOG_BATCH_SIZE,
     LOG_FLUSH_INTERVAL,
     MAX_CONCURRENT,
 )
-from .models import JobState, JobDefinition, JobRun
-from .process_manager import ProcessManager
 from .log_store import LogStore
 from .logging_setup import for_run
+from .models import JobDefinition, JobRun, JobState
 from .persistence import Persistence
+from .process_manager import ProcessManager
 from .retry_engine import RetryEngine
 
 if TYPE_CHECKING:
@@ -23,25 +23,26 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 class Executor:
     def __init__(
         self,
         persistence: Persistence,
         process_manager: ProcessManager,
         log_store: LogStore,
-        retry_engine: Optional[RetryEngine] = None
+        retry_engine: RetryEngine | None = None,
     ):
         self.persistence = persistence
         self.process_manager = process_manager
         self.log_store = log_store
         self.retry_engine = retry_engine
-        self.scheduler: Optional['Scheduler'] = None
+        self.scheduler: Scheduler | None = None
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
     def set_retry_engine(self, retry_engine: RetryEngine) -> None:
         self.retry_engine = retry_engine
 
-    def set_scheduler(self, scheduler: 'Scheduler') -> None:
+    def set_scheduler(self, scheduler: "Scheduler") -> None:
         """Wire the executor back to the scheduler so completed jobs
         can trigger fan-out of downstream dependents."""
         self.scheduler = scheduler
@@ -54,9 +55,7 @@ class Executor:
         """
         return self.semaphore.locked()
 
-    async def run_job(
-        self, job_name: str, definition: JobDefinition, attempt: int = 1
-    ) -> None:
+    async def run_job(self, job_name: str, definition: JobDefinition, attempt: int = 1) -> None:
         """
         Executes a job within the concurrency limit and enforces a timeout.
 
@@ -73,7 +72,7 @@ class Executor:
                 return
 
             run_id = str(uuid.uuid4())
-            start_time = time.strftime('%Y-%m-%d %H:%M:%S')
+            start_time = time.strftime("%Y-%m-%d %H:%M:%S")
             log = for_run(logger, job_name, run_id, attempt)
 
             job_run = JobRun(
@@ -81,7 +80,7 @@ class Executor:
                 run_id=run_id,
                 state=JobState.RUNNING,
                 start_time=start_time,
-                attempt=attempt
+                attempt=attempt,
             )
 
             # Record the run in DB via persistence
@@ -95,9 +94,7 @@ class Executor:
                 )
 
                 if await self._was_cancelled(job_name):
-                    await self.persistence.finalize_run(
-                        run_id, JobState.CANCELLED, exit_code
-                    )
+                    await self.persistence.finalize_run(run_id, JobState.CANCELLED, exit_code)
                     log.info(f"Cancelled, exit code {exit_code}")
                     metrics.increment("dag_runs_total", state=JobState.CANCELLED.value)
                     return
@@ -105,12 +102,8 @@ class Executor:
                 if timed_out:
                     log.warning(f"Timed out after {definition.timeout}s")
                     metrics.increment("dag_runs_total", state=JobState.TIMED_OUT.value)
-                    await self.persistence.finalize_run(
-                        run_id, JobState.TIMED_OUT, exit_code
-                    )
-                    await self.persistence.update_job_state(
-                        job_name, JobState.TIMED_OUT
-                    )
+                    await self.persistence.finalize_run(run_id, JobState.TIMED_OUT, exit_code)
+                    await self.persistence.update_job_state(job_name, JobState.TIMED_OUT)
                     return
 
                 final_state = JobState.DONE if exit_code == 0 else JobState.FAILED
@@ -131,9 +124,7 @@ class Executor:
                     await self.persistence.update_job_state(job_name, JobState.FAILED)
                     # Then let retry engine decide whether to re-enqueue
                     if self.retry_engine and exit_code is not None:
-                        await self.retry_engine.handle_retry(
-                            definition, job_run, exit_code
-                        )
+                        await self.retry_engine.handle_retry(definition, job_run, exit_code)
 
             except Exception as e:
                 log.error(f"Unexpected error: {e}", exc_info=True)
@@ -153,7 +144,7 @@ class Executor:
 
     async def _execute_shell(
         self, job_name: str, run_id: str, command: str, timeout: float
-    ) -> Tuple[Optional[int], bool]:
+    ) -> tuple[int | None, bool]:
         """Spawn the job, stream its output, and enforce the timeout.
 
         Returns (exit_code, timed_out).
@@ -178,20 +169,18 @@ class Executor:
 
         try:
             streaming = asyncio.gather(
-                self._stream_log(run_id, 'stdout', process.stdout),
-                self._stream_log(run_id, 'stderr', process.stderr),
+                self._stream_log(run_id, "stdout", process.stdout),
+                self._stream_log(run_id, "stderr", process.stderr),
                 process.wait(),
             )
             try:
                 await asyncio.wait_for(asyncio.shield(streaming), timeout=timeout)
             except asyncio.TimeoutError:
                 streaming.cancel()
-                try:
+                # Consume the cancellation so it is not reported as an
+                # unretrieved task exception.
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await streaming
-                except asyncio.CancelledError:
-                    pass
-                except Exception:
-                    pass
                 exit_code = await self.process_manager.terminate(process)
                 return exit_code, True
             return process.returncode, False
@@ -202,7 +191,7 @@ class Executor:
         self,
         run_id: str,
         stream_name: str,
-        stream_reader: Optional[asyncio.StreamReader],
+        stream_reader: asyncio.StreamReader | None,
     ) -> None:
         """Read a stream to EOF, writing to the log store in batches.
 
@@ -214,7 +203,7 @@ class Executor:
         if not stream_reader:
             return
 
-        buffer: List[Tuple[str, str]] = []
+        buffer: list[tuple[str, str]] = []
         last_flush = time.monotonic()
 
         async def flush() -> None:
@@ -230,7 +219,7 @@ class Executor:
                 if not line:
                     break
 
-                buffer.append((stream_name, line.decode('utf-8', errors='replace')))
+                buffer.append((stream_name, line.decode("utf-8", errors="replace")))
                 if (
                     len(buffer) >= LOG_BATCH_SIZE
                     or time.monotonic() - last_flush >= LOG_FLUSH_INTERVAL

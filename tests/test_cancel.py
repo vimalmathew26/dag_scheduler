@@ -29,9 +29,7 @@ def parts(persistence, tmp_path):
 
 
 class TestCancelWhileRunning:
-    async def test_run_is_recorded_as_cancelled_not_timed_out(
-        self, persistence, parts
-    ):
+    async def test_run_is_recorded_as_cancelled_not_timed_out(self, persistence, parts):
         executor, pm = parts
         definition = JobDefinition(command="sleep 30", timeout=60)
         await persistence.upsert_job("j", definition)
@@ -49,9 +47,7 @@ class TestCancelWhileRunning:
         assert len(runs) == 1
         assert runs[0]["state"] == JobState.CANCELLED.value
 
-    async def test_records_the_real_return_code_of_the_killed_process(
-        self, persistence, parts
-    ):
+    async def test_records_the_real_return_code_of_the_killed_process(self, persistence, parts):
         executor, pm = parts
         definition = JobDefinition(command="sleep 30", timeout=60)
         await persistence.upsert_job("j", definition)
@@ -83,8 +79,7 @@ class TestCancelWhileRunning:
         await asyncio.wait_for(task, timeout=15)
 
         assert task.exception() is None, (
-            f"cancel leaked an exception into the dispatch task: "
-            f"{task.exception()!r}"
+            f"cancel leaked an exception into the dispatch task: {task.exception()!r}"
         )
 
     async def test_job_stays_cancelled(self, persistence, parts):
@@ -115,9 +110,7 @@ class TestCancelWhileQueued:
         runs = await persistence.get_runs_for_job("j")
         assert len(runs) == 1
         assert runs[0]["state"] == JobState.CANCELLED.value
-        assert runs[0]["exit_code"] is None, (
-            "no process ran, so there is no exit code to report"
-        )
+        assert runs[0]["exit_code"] is None, "no process ran, so there is no exit code to report"
         assert runs[0]["end_time"] is not None
         assert runs[0]["start_time"] is None, "nothing ever started"
 

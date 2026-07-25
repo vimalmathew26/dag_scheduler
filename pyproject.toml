@@ -84,7 +84,15 @@ ignore = [
     "E501",     # line length is reported by the formatter, not the linter
     "B008",     # FastAPI's Depends() in defaults is the framework's idiom
     "SIM108",   # ternaries are not always clearer than an if
+    "UP041",    # see below
 ]
+# UP041 rewrites `except asyncio.TimeoutError` to the builtin TimeoutError.
+# That is correct on 3.11+, where the two are aliases, and silently wrong on
+# 3.10, where they are distinct classes and the handler stops firing. The
+# project requires 3.11, but keeping the explicit asyncio spelling costs
+# nothing there and keeps the timeout paths verifiable on an older
+# interpreter. Applying this fix broke four timeout tests before it was
+# caught, which is the argument for leaving it off.
 
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["B011"]

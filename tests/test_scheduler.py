@@ -1,13 +1,11 @@
 """Scheduler: enqueue, dependency fan-out, and the dispatch loop."""
 
 import asyncio
+import contextlib
 
 import pytest
 
-from dag_scheduler.executor import Executor
-from dag_scheduler.log_store import LogStore
 from dag_scheduler.models import JobDefinition, JobState
-from dag_scheduler.process_manager import ProcessManager
 from dag_scheduler.scheduler import Scheduler
 
 
@@ -112,8 +110,9 @@ class TestEnqueue:
         assert jobs["a"]["state"] is JobState.BLOCKED_UNRESOLVABLE
 
     @pytest.mark.parametrize(
-        "terminal", [JobState.DONE, JobState.FAILED, JobState.TIMED_OUT,
-                     JobState.UNKNOWN, JobState.CANCELLED])
+        "terminal",
+        [JobState.DONE, JobState.FAILED, JobState.TIMED_OUT, JobState.UNKNOWN, JobState.CANCELLED],
+    )
     async def test_terminal_job_is_reset_before_re_enqueue(self, persistence, terminal):
         await seed(persistence, a=job())
         await persistence.update_job_state("a", JobState.QUEUED)
@@ -168,10 +167,8 @@ class TestDispatchLoop:
         await asyncio.sleep(seconds)
         sched.running = False
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
 
     async def test_dispatches_a_queued_job_once(self, persistence):
         await seed(persistence, a=job())
@@ -257,6 +254,7 @@ class TestAgingLoop:
         sched.running = True
 
         import dag_scheduler.scheduler as module
+
         original = module.PRIORITY_AGING_INTERVAL
         module.PRIORITY_AGING_INTERVAL = 0.1
         try:
@@ -264,26 +262,23 @@ class TestAgingLoop:
             await asyncio.sleep(0.35)
             sched.running = False
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
         finally:
             module.PRIORITY_AGING_INTERVAL = original
 
         import aiosqlite
-        async with aiosqlite.connect(persistence.db_path) as db:
-            async with db.execute(
-                "SELECT current_priority FROM jobs WHERE name = 'a'"
-            ) as c:
-                priority = (await c.fetchone())[0]
+
+        async with (
+            aiosqlite.connect(persistence.db_path) as db,
+            db.execute("SELECT current_priority FROM jobs WHERE name = 'a'") as c,
+        ):
+            priority = (await c.fetchone())[0]
         assert priority > 1, "aging should have incremented at least once"
 
 
 class TestBackgroundTaskFailures:
-    async def test_a_failing_dispatch_is_logged_by_the_app_logger(
-        self, persistence, caplog
-    ):
+    async def test_a_failing_dispatch_is_logged_by_the_app_logger(self, persistence, caplog):
         """Failures used to surface only via the asyncio logger, as
         'Task exception was never retrieved', invisible to anyone filtering
         on dag_scheduler.*"""
@@ -305,10 +300,8 @@ class TestBackgroundTaskFailures:
             await asyncio.sleep(0.4)
             sched.running = False
             task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError):
                 await task
-            except asyncio.CancelledError:
-                pass
             await asyncio.sleep(0.1)
 
         messages = [r.message for r in caplog.records]
@@ -335,9 +328,7 @@ class TestBackgroundTaskFailures:
 
         sched.running = False
         task.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
         await asyncio.sleep(0.4)
         assert not [t for t in sched.dispatch_tasks() if not t.done()]

@@ -1,18 +1,19 @@
 # api.py - FastAPI endpoints for the DAG scheduler
 
+import json
 import logging
 import secrets
-from typing import Any, Dict, List, Optional
+from typing import Any
 
+import aiosqlite
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
-import aiosqlite
-import json
 
 from . import metrics
 from .config import API_TOKEN
 from .models import JobState
+from .persistence import InvalidTransitionError
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +31,7 @@ app.add_middleware(
 )
 
 
-def require_token(authorization: Optional[str] = Header(default=None)) -> None:
+def require_token(authorization: str | None = Header(default=None)) -> None:
     """Gate a mutating endpoint behind a shared token.
 
     If DAG_SCHEDULER_TOKEN is unset the daemon runs unauthenticated, which
@@ -48,9 +49,8 @@ def require_token(authorization: Optional[str] = Header(default=None)) -> None:
 
 # --------------- Dependency injection helpers ---------------
 
-def init_api(
-    sched: Any, reg: Any, pers: Any, logs: Any, proc_mgr: Any
-) -> None:
+
+def init_api(sched: Any, reg: Any, pers: Any, logs: Any, proc_mgr: Any) -> None:
     """Initialize API with dependencies stored on app.state."""
     app.state.scheduler = sched
     app.state.registry = reg
@@ -63,17 +63,22 @@ def init_api(
 def _get_scheduler(request: Request) -> Any:
     return request.app.state.scheduler
 
+
 def _get_registry(request: Request) -> Any:
     return request.app.state.registry
+
 
 def _get_persistence(request: Request) -> Any:
     return request.app.state.persistence
 
+
 def _get_log_store(request: Request) -> Any:
     return request.app.state.log_store
 
+
 def _get_process_manager(request: Request) -> Any:
     return request.app.state.process_manager
+
 
 def _get_db_path(request: Request) -> Any:
     """The database this daemon instance was started against.
@@ -85,22 +90,22 @@ def _get_db_path(request: Request) -> Any:
 
 
 @app.get("/")
-async def root() -> Dict[str, str]:
+async def root() -> dict[str, str]:
     return {"message": "DAG Scheduler API"}
 
 
 @app.get("/health")
-async def health_check() -> Dict[str, str]:
+async def health_check() -> dict[str, str]:
     """Daemon alive check"""
     return {"status": "ok"}
 
 
 @app.get("/jobs")
 async def list_jobs(
-    state: Optional[JobState] = Query(None, description="Filter by job state"),
-    tag: Optional[str] = Query(None, description="Filter by tag"),
+    state: JobState | None = Query(None, description="Filter by job state"),
+    tag: str | None = Query(None, description="Filter by tag"),
     db_path: Any = Depends(_get_db_path),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """List all jobs with current state, filter by state and tag"""
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -119,29 +124,31 @@ async def list_jobs(
 
             jobs = []
             for row in rows:
-                definition = json.loads(row['definition'])
+                definition = json.loads(row["definition"])
                 # Filter by tag if specified
-                if tag and tag not in definition.get('tags', []):
+                if tag and tag not in definition.get("tags", []):
                     continue
 
-                jobs.append({
-                    "name": row['name'],
-                    "state": row['state'],
-                    "tags": definition.get('tags', []),
-                    "priority": definition.get('priority', 1)
-                })
+                jobs.append(
+                    {
+                        "name": row["name"],
+                        "state": row["state"],
+                        "tags": definition.get("tags", []),
+                        "priority": definition.get("priority", 1),
+                    }
+                )
 
             return jobs
     except Exception as e:
         logger.error(f"Error listing jobs: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/jobs/{job_id}")
 async def get_job_detail(
     job_id: str,
     db_path: Any = Depends(_get_db_path),
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Get single job detail + last run summary"""
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -149,15 +156,14 @@ async def get_job_detail(
 
             # Get job details
             async with db.execute(
-                "SELECT name, state, definition FROM jobs WHERE name = ?",
-                (job_id,)
+                "SELECT name, state, definition FROM jobs WHERE name = ?", (job_id,)
             ) as cursor:
                 job_row = await cursor.fetchone()
 
             if not job_row:
                 raise HTTPException(status_code=404, detail="Job not found")
 
-            definition = json.loads(job_row['definition'])
+            definition = json.loads(job_row["definition"])
 
             # Get last run
             async with db.execute(
@@ -168,40 +174,37 @@ async def get_job_detail(
                 ORDER BY start_time DESC
                 LIMIT 1
                 """,
-                (job_id,)
+                (job_id,),
             ) as cursor:
                 run_row = await cursor.fetchone()
 
             last_run = dict(run_row) if run_row else None
 
             return {
-                "name": job_row['name'],
-                "state": job_row['state'],
+                "name": job_row["name"],
+                "state": job_row["state"],
                 "definition": definition,
-                "last_run": last_run
+                "last_run": last_run,
             }
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting job detail: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/jobs/{job_id}/runs")
 async def get_job_runs(
     job_id: str,
     db_path: Any = Depends(_get_db_path),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get run history for a job"""
     try:
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
 
             # Verify job exists
-            async with db.execute(
-                "SELECT name FROM jobs WHERE name = ?",
-                (job_id,)
-            ) as cursor:
+            async with db.execute("SELECT name FROM jobs WHERE name = ?", (job_id,)) as cursor:
                 if not await cursor.fetchone():
                     raise HTTPException(status_code=404, detail="Job not found")
 
@@ -213,7 +216,7 @@ async def get_job_runs(
                 WHERE job_name = ?
                 ORDER BY start_time DESC
                 """,
-                (job_id,)
+                (job_id,),
             ) as cursor:
                 rows = await cursor.fetchall()
 
@@ -222,7 +225,7 @@ async def get_job_runs(
         raise
     except Exception as e:
         logger.error(f"Error getting job runs: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/jobs/{job_id}/runs/{run_id}/logs")
@@ -231,28 +234,29 @@ async def get_run_logs(
     run_id: str,
     logs: Any = Depends(_get_log_store),
     db_path: Any = Depends(_get_db_path),
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Get stdout/stderr for a run"""
     try:
         # Verify run exists and belongs to job
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute(
-                "SELECT run_id FROM job_runs WHERE run_id = ? AND job_name = ?",
-                (run_id, job_id)
+                "SELECT run_id FROM job_runs WHERE run_id = ? AND job_name = ?", (run_id, job_id)
             ) as cursor:
                 if not await cursor.fetchone():
                     raise HTTPException(status_code=404, detail="Run not found")
 
         # Get logs
         log_entries = await logs.get_logs(run_id)
-        return [{"stream": stream, "chunk": chunk, "timestamp": timestamp}
-                for stream, chunk, timestamp in log_entries]
+        return [
+            {"stream": stream, "chunk": chunk, "timestamp": timestamp}
+            for stream, chunk, timestamp in log_entries
+        ]
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error getting run logs: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/jobs/{job_id}/trigger", dependencies=[Depends(require_token)])
@@ -260,7 +264,7 @@ async def trigger_job(
     job_id: str,
     reg: Any = Depends(_get_registry),
     sched: Any = Depends(_get_scheduler),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Force-queue a job bypassing dependency check (manual trigger)"""
     try:
         # Check if job exists
@@ -276,7 +280,7 @@ async def trigger_job(
         raise
     except Exception as e:
         logger.error(f"Error triggering job: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
@@ -285,28 +289,24 @@ async def cancel_job(
     pers: Any = Depends(_get_persistence),
     proc_mgr: Any = Depends(_get_process_manager),
     db_path: Any = Depends(_get_db_path),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Cancel a queued or running job"""
     try:
         # Get current job state
         async with aiosqlite.connect(db_path) as db:
             db.row_factory = aiosqlite.Row
-            async with db.execute(
-                "SELECT state FROM jobs WHERE name = ?",
-                (job_id,)
-            ) as cursor:
+            async with db.execute("SELECT state FROM jobs WHERE name = ?", (job_id,)) as cursor:
                 row = await cursor.fetchone()
 
             if not row:
                 raise HTTPException(status_code=404, detail="Job not found")
 
-            current_state = JobState(row['state'])
+            current_state = JobState(row["state"])
 
         # Only cancel QUEUED or RUNNING jobs
         if current_state not in [JobState.QUEUED, JobState.RUNNING]:
             raise HTTPException(
-                status_code=400,
-                detail=f"Cannot cancel job in state {current_state}"
+                status_code=400, detail=f"Cannot cancel job in state {current_state}"
             )
 
         # Mark the job cancelled before killing anything, so the executor
@@ -331,18 +331,20 @@ async def cancel_job(
         raise
     except Exception as e:
         logger.error(f"Error cancelling job: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
 async def get_metrics(db_path: Any = Depends(_get_db_path)) -> str:
     """Prometheus text exposition of process counters and queue gauges."""
-    async with aiosqlite.connect(db_path) as db:
-        async with db.execute(
+    async with (
+        aiosqlite.connect(db_path) as db,
+        db.execute(
             "SELECT state, COUNT(*) FROM jobs WHERE state IN (?, ?) GROUP BY state",
             (JobState.RUNNING.value, JobState.QUEUED.value),
-        ) as cursor:
-            counts = {row[0]: row[1] for row in await cursor.fetchall()}
+        ) as cursor,
+    ):
+        counts = {row[0]: row[1] for row in await cursor.fetchall()}
 
     metrics.set_gauge("dag_running_jobs", counts.get(JobState.RUNNING.value, 0))
     metrics.set_gauge("dag_queued_jobs", counts.get(JobState.QUEUED.value, 0))
@@ -350,7 +352,7 @@ async def get_metrics(db_path: Any = Depends(_get_db_path)) -> str:
 
 
 @app.get("/stats")
-async def get_statistics(db_path: Any = Depends(_get_db_path)) -> Dict[str, Any]:
+async def get_statistics(db_path: Any = Depends(_get_db_path)) -> dict[str, Any]:
     """Get aggregate statistics"""
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -364,8 +366,8 @@ async def get_statistics(db_path: Any = Depends(_get_db_path)) -> Dict[str, Any]
                 FROM job_runs
             """) as cursor:
                 stats_row = await cursor.fetchone()
-                total_runs = (stats_row['total_runs'] if stats_row else 0) or 0
-                passed_runs = (stats_row['passed_runs'] if stats_row else 0) or 0
+                total_runs = (stats_row["total_runs"] if stats_row else 0) or 0
+                passed_runs = (stats_row["passed_runs"] if stats_row else 0) or 0
                 pass_rate = passed_runs / total_runs if total_runs > 0 else 0
 
             # Get average duration
@@ -375,7 +377,7 @@ async def get_statistics(db_path: Any = Depends(_get_db_path)) -> Dict[str, Any]
                 WHERE end_time IS NOT NULL
             """) as cursor:
                 duration_row = await cursor.fetchone()
-                avg_duration = (duration_row['avg_duration'] if duration_row else 0) or 0
+                avg_duration = (duration_row["avg_duration"] if duration_row else 0) or 0
 
             # Get jobs by state
             async with db.execute("""
@@ -384,35 +386,34 @@ async def get_statistics(db_path: Any = Depends(_get_db_path)) -> Dict[str, Any]
                 GROUP BY state
             """) as cursor:
                 rows = await cursor.fetchall()
-                jobs_by_state = {row['state']: row['count'] for row in rows}
+                jobs_by_state = {row["state"]: row["count"] for row in rows}
 
             return {
                 "total_runs": total_runs,
                 "pass_rate": pass_rate,
                 "avg_duration_seconds": avg_duration,
-                "jobs_by_state": jobs_by_state
+                "jobs_by_state": jobs_by_state,
             }
     except Exception as e:
         logger.error(f"Error getting statistics: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @app.post("/jobs/{job_id}/reset", dependencies=[Depends(require_token)])
 async def reset_job(
     job_id: str,
     pers: Any = Depends(_get_persistence),
-) -> Dict[str, str]:
+) -> dict[str, str]:
     """Reset a job in a terminal state (done/failed/timed_out/unknown/cancelled) back to defined."""
     try:
-        from .persistence import InvalidTransitionError
         result = await pers.reset_job_state(job_id)
         if not result:
             raise HTTPException(status_code=404, detail="Job not found")
         return {"status": "success", "message": f"Job {job_id} reset to defined"}
     except InvalidTransitionError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Error resetting job: {e}")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(status_code=500, detail="Internal server error") from e

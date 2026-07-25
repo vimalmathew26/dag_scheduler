@@ -2,8 +2,6 @@
 
 import asyncio
 
-import pytest
-
 from dag_scheduler.file_watcher import FileWatcher
 from dag_scheduler.models import JobDefinition, JobRun, JobState, RetryPolicy
 from dag_scheduler.retry_engine import RetryEngine
@@ -53,9 +51,9 @@ class TestHandleRetry:
         engine = RetryEngine(sched)
 
         await engine.handle_retry(
-            definition(max_attempts=3, retry_on_exit_codes=[1], backoff_base=1.0,
-                       jitter=False),
-            run(1), 42,
+            definition(max_attempts=3, retry_on_exit_codes=[1], backoff_base=1.0, jitter=False),
+            run(1),
+            42,
         )
         await asyncio.sleep(1.4)
 

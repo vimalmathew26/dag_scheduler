@@ -3,33 +3,36 @@
 import asyncio
 import logging
 import random
-from typing import TYPE_CHECKING, Any, Set
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .scheduler import Scheduler
     from .models import JobDefinition, JobRun
+    from .scheduler import Scheduler
 
 from . import metrics
 from .logging_setup import for_run
 
 logger = logging.getLogger(__name__)
 
+
 class RetryEngine:
     """Handles job retry policies based on exit codes and exponential backoff with jitter."""
 
-    def __init__(self, scheduler: 'Scheduler'):
+    def __init__(self, scheduler: "Scheduler"):
         self.scheduler = scheduler
-        self._pending: Set['asyncio.Task[Any]'] = set()
+        self._pending: set[asyncio.Task[Any]] = set()
 
     @staticmethod
-    def _report_failure(task: 'asyncio.Task[Any]') -> None:
+    def _report_failure(task: "asyncio.Task[Any]") -> None:
         if task.cancelled():
             return
         exc = task.exception()
         if exc is not None:
             logger.error(f"Retry task failed: {exc!r}", exc_info=exc)
 
-    def should_retry(self, job_definition: 'JobDefinition', job_run: 'JobRun', exit_code: int) -> bool:
+    def should_retry(
+        self, job_definition: "JobDefinition", job_run: "JobRun", exit_code: int
+    ) -> bool:
         """
         Determine if a job should be retried based on its retry policy and exit code.
 
@@ -48,7 +51,7 @@ class RetryEngine:
         # Check if exit code is in retry policy
         return exit_code in job_definition.retry.retry_on_exit_codes
 
-    def calculate_backoff(self, job_definition: 'JobDefinition', attempt: int) -> float:
+    def calculate_backoff(self, job_definition: "JobDefinition", attempt: int) -> float:
         """
         Calculate the backoff time with exponential backoff and optional jitter.
 
@@ -60,7 +63,7 @@ class RetryEngine:
             float: Backoff time in seconds
         """
         # Calculate base backoff: backoff_base^attempt
-        backoff = job_definition.retry.backoff_base ** attempt
+        backoff = job_definition.retry.backoff_base**attempt
 
         # Apply jitter if enabled (±20%)
         if job_definition.retry.jitter:
@@ -72,8 +75,8 @@ class RetryEngine:
 
     async def handle_retry(
         self,
-        job_definition: 'JobDefinition',
-        job_run: 'JobRun',
+        job_definition: "JobDefinition",
+        job_run: "JobRun",
         exit_code: int,
     ) -> None:
         """
@@ -96,9 +99,9 @@ class RetryEngine:
             # Schedule the retry after backoff. The task is held and its
             # failures reported, rather than being fire-and-forget.
             metrics.increment("dag_retries_total")
-            task = asyncio.create_task(self._retry_after_delay(
-                job_run.job_name, backoff_time, attempt=job_run.attempt + 1
-            ))
+            task = asyncio.create_task(
+                self._retry_after_delay(job_run.job_name, backoff_time, attempt=job_run.attempt + 1)
+            )
             self._pending.add(task)
             task.add_done_callback(self._pending.discard)
             task.add_done_callback(self._report_failure)
@@ -110,9 +113,7 @@ class RetryEngine:
                 f"{job_definition.retry.retry_on_exit_codes}"
             )
 
-    async def _retry_after_delay(
-        self, job_name: str, delay: float, attempt: int = 1
-    ) -> None:
+    async def _retry_after_delay(self, job_name: str, delay: float, attempt: int = 1) -> None:
         """
         Wait for the specified delay and then re-queue the job.
 

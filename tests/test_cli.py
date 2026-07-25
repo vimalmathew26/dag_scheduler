@@ -34,9 +34,7 @@ class TestLogsPicksTheLatestRun:
             else:
                 requested["url"] = url
                 body = []
-            return httpx.Response(
-                200, content=json.dumps(body), request=httpx.Request("GET", url)
-            )
+            return httpx.Response(200, content=json.dumps(body), request=httpx.Request("GET", url))
 
         monkeypatch.setattr(cli_module.httpx, "get", fake_get)
 
@@ -49,9 +47,7 @@ class TestLogsPicksTheLatestRun:
 
     def test_no_runs_is_not_an_error(self, runner, monkeypatch):
         def fake_get(url, *a, **kw):
-            return httpx.Response(
-                200, content="[]", request=httpx.Request("GET", url)
-            )
+            return httpx.Response(200, content="[]", request=httpx.Request("GET", url))
 
         monkeypatch.setattr(cli_module.httpx, "get", fake_get)
         result = runner.invoke(cli_module.cli, ["logs", "myjob"])
@@ -60,9 +56,7 @@ class TestLogsPicksTheLatestRun:
 
 
 class TestDaemonDown:
-    @pytest.mark.parametrize(
-        "args", [["status"], ["stats"], ["runs", "j"], ["logs", "j"]]
-    )
+    @pytest.mark.parametrize("args", [["status"], ["stats"], ["runs", "j"], ["logs", "j"]])
     def test_read_commands_report_connection_refused(self, runner, monkeypatch, args):
         def refuse(url, *a, **kw):
             raise httpx.ConnectError("refused")
@@ -87,7 +81,5 @@ class TestCommandSurface:
     def test_every_documented_command_exists(self, runner):
         """The README lists these; all of them must be real."""
         result = runner.invoke(cli_module.cli, ["--help"])
-        for command in [
-            "load", "status", "trigger", "logs", "runs", "stats", "cancel", "reset"
-        ]:
+        for command in ["load", "status", "trigger", "logs", "runs", "stats", "cancel", "reset"]:
             assert command in result.output, f"{command} is documented but missing"

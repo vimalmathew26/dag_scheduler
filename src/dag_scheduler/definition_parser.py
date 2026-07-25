@@ -1,27 +1,38 @@
-import yaml
-import tomllib
 import logging
+import tomllib
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
-from .models import JobDefinition, DefinitionFile, RetryPolicy
-from .dag import topological_sort, CycleError
+from typing import Any
+
+import yaml
+
+from .dag import CycleError, topological_sort
+from .models import JobDefinition, RetryPolicy
 
 logger = logging.getLogger(__name__)
 
+
 class ParseError(Exception):
     """Raised when a job definition file fails validation."""
+
     def __init__(
         self,
         message: str,
-        file_path: Optional[Path] = None,
-        line: Optional[int] = None,
+        file_path: Path | None = None,
+        line: int | None = None,
     ) -> None:
         self.file_path = file_path
         self.line = line
-        prefix = f"[{file_path}:{line}] " if file_path and line else f"[{file_path}] " if file_path else ""
+        prefix = (
+            f"[{file_path}:{line}] "
+            if file_path and line
+            else f"[{file_path}] "
+            if file_path
+            else ""
+        )
         super().__init__(f"{prefix}{message}")
 
-def load_file(path: Path) -> Dict[str, Any]:
+
+def load_file(path: Path) -> dict[str, Any]:
     """Load a single YAML or TOML file."""
     try:
         with open(path, "rb") as f:
@@ -32,16 +43,17 @@ def load_file(path: Path) -> Dict[str, Any]:
             else:
                 return {}
     except Exception as e:
-        raise ParseError(f"Failed to read file: {e}", file_path=path)
+        raise ParseError(f"Failed to read file: {e}", file_path=path) from e
+
 
 class DefinitionParser:
     def __init__(self) -> None:
-        self.all_jobs: Dict[str, JobDefinition] = {}
-        self.job_to_file: Dict[str, Path] = {}
-        self.parsed_files: List[Path] = []
-        self.rejected: Dict[str, str] = {}
+        self.all_jobs: dict[str, JobDefinition] = {}
+        self.job_to_file: dict[str, Path] = {}
+        self.parsed_files: list[Path] = []
+        self.rejected: dict[str, str] = {}
 
-    def parse_directory(self, directory: Path) -> Dict[str, JobDefinition]:
+    def parse_directory(self, directory: Path) -> dict[str, JobDefinition]:
         """
         Parses all .yaml and .toml files in a directory.
         Returns a flat namespace of JobDefinitions.
@@ -61,8 +73,8 @@ class DefinitionParser:
         # Pass 1: read every file and collect each declaration with the file
         # it came from, so a name declared more than once can be recognised
         # as a conflict rather than a race between files.
-        raw_definitions: Dict[str, Dict[str, Any]] = {}
-        declarations: Dict[str, List[Tuple[Path, Dict[str, Any]]]] = {}
+        raw_definitions: dict[str, dict[str, Any]] = {}
+        declarations: dict[str, list[tuple[Path, dict[str, Any]]]] = {}
 
         for path in files:
             try:
@@ -75,15 +87,19 @@ class DefinitionParser:
                 continue
 
             file_valid = True
-            file_jobs: Dict[str, Dict[str, Any]] = {}
+            file_jobs: dict[str, dict[str, Any]] = {}
             for job_name, job_dict in data["jobs"].items():
                 if not isinstance(job_dict, dict):
-                    logger.warning(f"Skipping file {path}: job '{job_name}' definition must be a dictionary")
+                    logger.warning(
+                        f"Skipping file {path}: job '{job_name}' definition must be a dictionary"
+                    )
                     file_valid = False
                     break
 
                 if "command" not in job_dict:
-                    logger.warning(f"Skipping file {path}: job '{job_name}' missing required 'command' field")
+                    logger.warning(
+                        f"Skipping file {path}: job '{job_name}' missing required 'command' field"
+                    )
                     file_valid = False
                     break
 
@@ -112,9 +128,7 @@ class DefinitionParser:
                     f"declared in multiple files ({paths}). Remove the duplicate "
                     f"and the job will load."
                 )
-                self.rejected[name] = (
-                    f"declared in multiple files ({paths})"
-                )
+                self.rejected[name] = f"declared in multiple files ({paths})"
                 continue
 
             path, jdict = declared[0]
@@ -123,7 +137,7 @@ class DefinitionParser:
 
         # Pass 2: Validate dependency references and construct JobDefinition objects.
         # Jobs with invalid deps are removed, and removal cascades to their dependents.
-        to_remove: Set[str] = set()
+        to_remove: set[str] = set()
         for job_name, job_dict in raw_definitions.items():
             deps = job_dict.get("depends_on", [])
             if not isinstance(deps, list):

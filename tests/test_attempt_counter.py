@@ -43,9 +43,7 @@ class TestAttemptPersistence:
         await scheduler.enqueue_job("j", bypass_deps=True)
         assert await persistence.get_job_attempt("j") == 1
 
-    async def test_enqueue_records_the_attempt_it_was_given(
-        self, persistence, scheduler
-    ):
+    async def test_enqueue_records_the_attempt_it_was_given(self, persistence, scheduler):
         await persistence.upsert_job("j", JobDefinition(command="exit 1"))
         await scheduler.enqueue_job("j", bypass_deps=True, attempt=3)
         assert await persistence.get_job_attempt("j") == 3
@@ -59,9 +57,7 @@ class TestAttemptPersistence:
         assert claimed == "j"
         assert await persistence.get_job_attempt("j") == 2
 
-    async def test_retry_round_trip_increments_rather_than_resetting(
-        self, persistence, scheduler
-    ):
+    async def test_retry_round_trip_increments_rather_than_resetting(self, persistence, scheduler):
         """The exact round trip that was broken.
 
         Enqueue at attempt N, claim it, then enqueue again at N+1 the way
@@ -78,9 +74,7 @@ class TestAttemptPersistence:
 
         assert seen == [1, 2, 3], "each dispatch must see its own attempt number"
 
-    async def test_a_fresh_trigger_after_failure_resets_to_one(
-        self, persistence, scheduler
-    ):
+    async def test_a_fresh_trigger_after_failure_resets_to_one(self, persistence, scheduler):
         """A manual re-trigger is a new run, not a continuation."""
         await persistence.upsert_job("j", JobDefinition(command="exit 1"))
         await scheduler.enqueue_job("j", bypass_deps=True, attempt=3)

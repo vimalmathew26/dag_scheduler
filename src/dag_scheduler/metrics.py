@@ -9,10 +9,9 @@ gauges, incremented in place.
 """
 
 from collections import defaultdict
-from typing import Dict, Tuple
 
-_counters: Dict[Tuple[str, Tuple[Tuple[str, str], ...]], float] = defaultdict(float)
-_gauges: Dict[str, float] = {}
+_counters: dict[tuple[str, tuple[tuple[str, str], ...]], float] = defaultdict(float)
+_gauges: dict[str, float] = {}
 
 _HELP = {
     "dag_dispatches_total": ("counter", "Jobs claimed and handed to the executor"),
@@ -40,7 +39,7 @@ def reset() -> None:
     _gauges.clear()
 
 
-def _format_labels(labels: Tuple[Tuple[str, str], ...]) -> str:
+def _format_labels(labels: tuple[tuple[str, str], ...]) -> str:
     if not labels:
         return ""
     inner = ",".join(f'{k}="{v}"' for k, v in labels)
@@ -49,7 +48,7 @@ def _format_labels(labels: Tuple[Tuple[str, str], ...]) -> str:
 
 def render() -> str:
     """Render every series in Prometheus text exposition format."""
-    by_name: Dict[str, list] = defaultdict(list)
+    by_name: dict[str, list] = defaultdict(list)
     for (name, labels), value in _counters.items():
         by_name[name].append((labels, value))
     for name, value in _gauges.items():

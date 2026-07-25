@@ -46,9 +46,7 @@ class TestExhaustiveMatrix:
         assert illegal == 69
 
     @pytest.mark.parametrize("from_state,to_state", ALL_PAIRS)
-    def test_membership_exactly_predicts_rejection(
-        self, persistence, from_state, to_state
-    ):
+    def test_membership_exactly_predicts_rejection(self, persistence, from_state, to_state):
         """Membership in VALID_TRANSITIONS decides acceptance, nothing else.
 
         A same-state transition is a documented no-op (persistence.py
@@ -128,9 +126,7 @@ class TestStateMachineProperties:
         assert targets == {JobState.DEFINED, JobState.QUEUED, JobState.WAITING}
 
     def test_cancellation_is_reachable_from_queued_and_running_only(self):
-        sources = {
-            f for f, t in Persistence.VALID_TRANSITIONS if t is JobState.CANCELLED
-        }
+        sources = {f for f, t in Persistence.VALID_TRANSITIONS if t is JobState.CANCELLED}
         assert sources == {JobState.QUEUED, JobState.RUNNING}
 
     def test_every_state_is_reachable_from_defined(self):
@@ -150,7 +146,5 @@ class TestStateMachineProperties:
         assert seen == set(ALL_STATES), f"unreachable: {set(ALL_STATES) - seen}"
 
     def test_validate_transition_is_not_a_coroutine(self, persistence):
-        result = persistence.validate_transition(
-            "j", JobState.DEFINED, JobState.QUEUED
-        )
+        result = persistence.validate_transition("j", JobState.DEFINED, JobState.QUEUED)
         assert result is None

@@ -6,8 +6,11 @@ from dag_scheduler.models import JobDefinition, JobRun, JobState
 from dag_scheduler.persistence import InvalidTransitionError
 
 TERMINAL = [
-    JobState.DONE, JobState.FAILED, JobState.TIMED_OUT,
-    JobState.UNKNOWN, JobState.CANCELLED,
+    JobState.DONE,
+    JobState.FAILED,
+    JobState.TIMED_OUT,
+    JobState.UNKNOWN,
+    JobState.CANCELLED,
 ]
 
 
@@ -108,11 +111,12 @@ class TestPriorityAging:
 
         async def priority_of(name):
             import aiosqlite
-            async with aiosqlite.connect(persistence.db_path) as db:
-                async with db.execute(
-                    "SELECT current_priority FROM jobs WHERE name = ?", (name,)
-                ) as c:
-                    return (await c.fetchone())[0]
+
+            async with (
+                aiosqlite.connect(persistence.db_path) as db,
+                db.execute("SELECT current_priority FROM jobs WHERE name = ?", (name,)) as c,
+            ):
+                return (await c.fetchone())[0]
 
         assert await priority_of("q") == 2
         assert await priority_of("d") == 1
@@ -166,8 +170,13 @@ class TestRuns:
     async def test_record_and_finalize(self, persistence):
         await persistence.upsert_job("j", JobDefinition(command="true"))
         await persistence.record_run(
-            JobRun(job_name="j", run_id="r1", state=JobState.RUNNING,
-                   start_time="2026-01-01 00:00:00", attempt=2)
+            JobRun(
+                job_name="j",
+                run_id="r1",
+                state=JobState.RUNNING,
+                start_time="2026-01-01 00:00:00",
+                attempt=2,
+            )
         )
         await persistence.finalize_run("r1", JobState.DONE, 0)
 
@@ -181,8 +190,9 @@ class TestRuns:
     async def test_finalize_accepts_a_null_exit_code(self, persistence):
         await persistence.upsert_job("j", JobDefinition(command="true"))
         await persistence.record_run(
-            JobRun(job_name="j", run_id="r1", state=JobState.RUNNING,
-                   start_time="2026-01-01 00:00:00")
+            JobRun(
+                job_name="j", run_id="r1", state=JobState.RUNNING, start_time="2026-01-01 00:00:00"
+            )
         )
         await persistence.finalize_run("r1", JobState.UNKNOWN, None)
         runs = await persistence.get_runs_for_job("j")
@@ -197,7 +207,9 @@ class TestRevalidate:
         await persistence.upsert_job("child", JobDefinition(command="true", depends_on=["gone"]))
         await persistence.update_job_state("child", JobState.WAITING)
 
-        await persistence.revalidate_jobs({"child": JobDefinition(command="true", depends_on=["gone"])})
+        await persistence.revalidate_jobs(
+            {"child": JobDefinition(command="true", depends_on=["gone"])}
+        )
 
         jobs = await persistence.get_all_db_jobs()
         assert jobs["child"]["state"] is JobState.BLOCKED_UNRESOLVABLE

@@ -23,9 +23,7 @@ class TestJsonFormatter:
         assert payload["logger"] == "dag_scheduler.executor"
 
     def test_adapter_fields_become_queryable_keys(self):
-        record = logging.LogRecord(
-            "x", logging.INFO, "f.py", 1, "started", (), None
-        )
+        record = logging.LogRecord("x", logging.INFO, "f.py", 1, "started", (), None)
         record.job = "etl"
         record.run_id = "abc-123"
         record.attempt = 2
@@ -39,9 +37,8 @@ class TestJsonFormatter:
             raise ValueError("boom")
         except ValueError:
             import sys
-            record = logging.LogRecord(
-                "x", logging.ERROR, "f.py", 1, "failed", (), sys.exc_info()
-            )
+
+            record = logging.LogRecord("x", logging.ERROR, "f.py", 1, "failed", (), sys.exc_info())
         payload = json.loads(JsonFormatter().format(record))
         assert "boom" in payload["exception"]
 
@@ -61,9 +58,7 @@ class TestRunCorrelation:
 
     async def test_every_line_of_a_run_carries_its_run_id(self, persistence, tmp_path, caplog):
         """The point of correlation: one filter returns the whole run."""
-        executor = Executor(
-            persistence, ProcessManager(persistence), LogStore(tmp_path / "t.db")
-        )
+        executor = Executor(persistence, ProcessManager(persistence), LogStore(tmp_path / "t.db"))
         definition = JobDefinition(command="echo hi", timeout=10)
         await persistence.upsert_job("j", definition)
         await persistence.update_job_state("j", JobState.QUEUED)
@@ -75,17 +70,13 @@ class TestRunCorrelation:
         runs = await persistence.get_runs_for_job("j")
         run_id = runs[0]["run_id"]
         correlated = [r for r in caplog.records if getattr(r, "run_id", None) == run_id]
-        assert len(correlated) >= 2, (
-            "start and finish must both be attributable to the run"
-        )
+        assert len(correlated) >= 2, "start and finish must both be attributable to the run"
         assert all(r.job == "j" for r in correlated)
 
 
 class TestLogBatching:
     async def test_batched_writes_preserve_order(self, persistence, tmp_path):
-        executor = Executor(
-            persistence, ProcessManager(persistence), LogStore(persistence.db_path)
-        )
+        executor = Executor(persistence, ProcessManager(persistence), LogStore(persistence.db_path))
         store = LogStore(persistence.db_path)
         definition = JobDefinition(
             command="for i in $(seq 1 250); do echo line$i; done", timeout=30
@@ -114,11 +105,12 @@ class TestLogBatching:
 class TestIndexes:
     async def test_expected_indexes_exist(self, persistence):
         import aiosqlite
-        async with aiosqlite.connect(persistence.db_path) as db:
-            async with db.execute(
-                "SELECT name FROM sqlite_master WHERE type='index'"
-            ) as cursor:
-                names = {row[0] for row in await cursor.fetchall()}
+
+        async with (
+            aiosqlite.connect(persistence.db_path) as db,
+            db.execute("SELECT name FROM sqlite_master WHERE type='index'") as cursor,
+        ):
+            names = {row[0] for row in await cursor.fetchall()}
 
         assert {
             "idx_job_runs_job_name",
@@ -129,10 +121,13 @@ class TestIndexes:
 
     async def test_run_history_lookup_uses_the_index(self, persistence):
         import aiosqlite
-        async with aiosqlite.connect(persistence.db_path) as db:
-            async with db.execute(
+
+        async with (
+            aiosqlite.connect(persistence.db_path) as db,
+            db.execute(
                 "EXPLAIN QUERY PLAN SELECT run_id FROM job_runs "
                 "WHERE job_name = 'x' ORDER BY start_time DESC"
-            ) as cursor:
-                plan = " ".join(str(row) for row in await cursor.fetchall())
+            ) as cursor,
+        ):
+            plan = " ".join(str(row) for row in await cursor.fetchall())
         assert "idx_job_runs_job_name" in plan, f"full scan: {plan}"
