@@ -2,7 +2,7 @@ import aiosqlite
 import asyncio
 import logging
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Tuple
 from .config import DB_PATH
 
 logger = logging.getLogger(__name__)
@@ -10,10 +10,12 @@ logger = logging.getLogger(__name__)
 class LogStore:
     """Handles storage and retrieval of job run logs."""
 
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Path = DB_PATH) -> None:
         self.db_path = db_path
 
-    async def store_log_chunk(self, job_run_id: str, stream: str, chunk: str):
+    async def store_log_chunk(
+        self, job_run_id: str, stream: str, chunk: str
+    ) -> None:
         """
         Store a stdout/stderr chunk for a job run.
 
@@ -39,7 +41,9 @@ class LogStore:
             logger.error(f"Failed to store log chunk for run {job_run_id}: {e}")
             raise
 
-    async def store_log_chunks(self, job_run_id: str, chunks: list) -> None:
+    async def store_log_chunks(
+        self, job_run_id: str, chunks: List[Tuple[str, str]]
+    ) -> None:
         """Store a batch of (stream, chunk) pairs in one transaction.
 
         Log lines used to be written one at a time, each opening its own
@@ -64,7 +68,7 @@ class LogStore:
             logger.error(f"Failed to store log chunks for run {job_run_id}: {e}")
             raise
 
-    async def get_logs(self, job_run_id: str) -> list:
+    async def get_logs(self, job_run_id: str) -> List[Tuple[str, str, str]]:
         """
         Retrieve all logs for a job run.
 
@@ -92,7 +96,7 @@ class LogStore:
             logger.error(f"Failed to retrieve logs for run {job_run_id}: {e}")
             raise
 
-    async def get_logs_for_job(self, job_name: str) -> list:
+    async def get_logs_for_job(self, job_name: str) -> List[Tuple[str, str, str]]:
         """
         Retrieve all logs for the most recent run of a job.
 

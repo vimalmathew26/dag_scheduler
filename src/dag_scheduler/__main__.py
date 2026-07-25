@@ -2,6 +2,8 @@ import asyncio
 import signal
 import logging
 import sys
+from pathlib import Path
+from typing import Any, Optional
 import uvicorn
 from .config import (
     API_HOST,
@@ -29,7 +31,9 @@ configure_logging(LOG_LEVEL, json_output=LOG_JSON)
 logger = logging.getLogger("dag_scheduler.main")
 
 class Daemon:
-    def __init__(self, db_path=None, jobs_dir=None):
+    def __init__(
+        self, db_path: Optional[Path] = None, jobs_dir: Optional[Path] = None
+    ) -> None:
         self.db_path = db_path or DB_PATH
         self.jobs_dir = jobs_dir or JOBS_DIR
         ensure_directories(self.db_path, self.jobs_dir)
@@ -49,11 +53,11 @@ class Daemon:
 
         self.file_watcher = FileWatcher(self.registry, self.jobs_dir)
 
-        self.api_server = None
-        self.api_task = None
+        self.api_server: Optional[uvicorn.Server] = None
+        self.api_task: Optional['asyncio.Task[Any]'] = None
         self._shutting_down = False
 
-    async def shutdown(self, sig=None):
+    async def shutdown(self, sig: Optional[signal.Signals] = None) -> None:
         """Stop cleanly: drain the API, kill jobs, let writes finish.
 
         The old sequence set a stop event and then cancelled every
@@ -107,7 +111,7 @@ class Daemon:
         self.stop_event.set()
         logger.info("Daemon shutdown complete")
 
-    async def run(self):
+    async def run(self) -> None:
         # 1. DB Setup
         await self.persistence.setup()
 
@@ -133,7 +137,7 @@ class Daemon:
         self.api_server = uvicorn.Server(config)
         # Uvicorn installs its own signal handlers by default, which would
         # race ours. The daemon owns the shutdown sequence.
-        self.api_server.install_signal_handlers = lambda: None
+        setattr(self.api_server, 'install_signal_handlers', lambda: None)
         self.api_task = asyncio.create_task(self.api_server.serve())
 
         if API_TOKEN:
@@ -154,12 +158,15 @@ class Daemon:
         # Wait for stop event
         await self.stop_event.wait()
 
-async def main_async():
+async def main_async() -> None:
     daemon = Daemon()
 
     loop = asyncio.get_running_loop()
+    def _handle_signal(received: signal.Signals) -> None:
+        asyncio.create_task(daemon.shutdown(received))
+
     for sig in (signal.SIGINT, signal.SIGTERM):
-        loop.add_signal_handler(sig, lambda s=sig: asyncio.create_task(daemon.shutdown(s)))
+        loop.add_signal_handler(sig, _handle_signal, sig)
 
     try:
         await daemon.run()
@@ -169,7 +176,7 @@ async def main_async():
         logger.exception(f"Fatal error in daemon: {e}")
         sys.exit(1)
 
-def main():
+def main() -> None:
     try:
         asyncio.run(main_async())
     except KeyboardInterrupt:

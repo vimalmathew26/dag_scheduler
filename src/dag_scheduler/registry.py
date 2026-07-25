@@ -1,7 +1,10 @@
 import asyncio
 import logging
 from pathlib import Path
-from typing import Dict, Optional, Set
+from typing import TYPE_CHECKING, Dict, Optional, Set
+
+if TYPE_CHECKING:
+    from .persistence import Persistence
 from .models import JobDefinition, JobState
 from .definition_parser import DefinitionParser
 from .config import JOBS_DIR
@@ -14,13 +17,15 @@ class Registry:
     diffing definitions, and transitioning removed jobs.
     """
 
-    def __init__(self, persistence, jobs_dir: Optional[Path] = None):
+    def __init__(
+        self, persistence: 'Persistence', jobs_dir: Optional[Path] = None
+    ) -> None:
         self.persistence = persistence
         self.jobs_dir = Path(jobs_dir) if jobs_dir is not None else JOBS_DIR
         self.jobs: Dict[str, JobDefinition] = {}
         self._reload_lock = asyncio.Lock()
 
-    async def load_initial(self):
+    async def load_initial(self) -> None:
         """Initial load of jobs on startup."""
         async with self._reload_lock:
             parser = DefinitionParser()
@@ -37,7 +42,7 @@ class Registry:
                 logger.error(f"Initial load failed: {e}")
                 raise
 
-    async def reload(self):
+    async def reload(self) -> None:
         """Reparse the jobs directory and reconcile the database.
 
         Parsing happens outside the lock and off the event loop, because it
@@ -66,7 +71,11 @@ class Registry:
             await self._handle_diff(old_jobs, new_jobs)
             self.jobs = new_jobs
 
-    async def _handle_diff(self, old_jobs: Dict[str, JobDefinition], new_jobs: Dict[str, JobDefinition]):
+    async def _handle_diff(
+        self,
+        old_jobs: Dict[str, JobDefinition],
+        new_jobs: Dict[str, JobDefinition],
+    ) -> None:
         """
         Diffs old vs new snapshot and handles removed/changed jobs.
         """

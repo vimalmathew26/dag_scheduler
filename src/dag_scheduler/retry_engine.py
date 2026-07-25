@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import random
-from typing import TYPE_CHECKING, Set
+from typing import TYPE_CHECKING, Any, Set
 
 if TYPE_CHECKING:
     from .scheduler import Scheduler
@@ -19,10 +19,10 @@ class RetryEngine:
 
     def __init__(self, scheduler: 'Scheduler'):
         self.scheduler = scheduler
-        self._pending: Set[asyncio.Task] = set()
+        self._pending: Set['asyncio.Task[Any]'] = set()
 
     @staticmethod
-    def _report_failure(task: asyncio.Task) -> None:
+    def _report_failure(task: 'asyncio.Task[Any]') -> None:
         if task.cancelled():
             return
         exc = task.exception()
@@ -70,7 +70,12 @@ class RetryEngine:
         # Ensure backoff is non-negative
         return max(0, backoff)
 
-    async def handle_retry(self, job_definition: 'JobDefinition', job_run: 'JobRun', exit_code: int):
+    async def handle_retry(
+        self,
+        job_definition: 'JobDefinition',
+        job_run: 'JobRun',
+        exit_code: int,
+    ) -> None:
         """
         Handle retry logic for a job run.
 
@@ -105,7 +110,9 @@ class RetryEngine:
                 f"{job_definition.retry.retry_on_exit_codes}"
             )
 
-    async def _retry_after_delay(self, job_name: str, delay: float, attempt: int = 1):
+    async def _retry_after_delay(
+        self, job_name: str, delay: float, attempt: int = 1
+    ) -> None:
         """
         Wait for the specified delay and then re-queue the job.
 

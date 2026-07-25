@@ -4,7 +4,7 @@ from .models import JobDefinition, JobState
 
 class CycleError(Exception):
     """Raised when a cycle is detected in the dependency graph."""
-    def __init__(self, cycle: List[str]):
+    def __init__(self, cycle: List[str]) -> None:
         self.cycle = cycle
         super().__init__(f"Cycle detected: {' -> '.join(cycle)}")
 

@@ -5,13 +5,15 @@ import logging
 from typing import Optional, Dict, List, Any, Set
 from pathlib import Path
 from .config import DB_PATH
-from .models import JobState, JobDefinition
+from .models import JobDefinition, JobRun, JobState
 
 logger = logging.getLogger(__name__)
 
 class InvalidTransitionError(Exception):
     """Raised when an invalid job state transition is attempted."""
-    def __init__(self, job_name: str, from_state: JobState, to_state: JobState):
+    def __init__(
+        self, job_name: str, from_state: JobState, to_state: JobState
+    ) -> None:
         self.job_name = job_name
         self.from_state = from_state
         self.to_state = to_state
@@ -50,10 +52,10 @@ class Persistence:
         (JobState.CANCELLED, JobState.DEFINED),
     }
 
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Path = DB_PATH) -> None:
         self.db_path = db_path
 
-    async def setup(self):
+    async def setup(self) -> None:
         """Initialize database with WAL mode and create tables."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute('PRAGMA journal_mode=WAL;')
@@ -110,7 +112,7 @@ class Persistence:
             )
             await db.commit()
 
-    async def _migrate_add_current_attempt(self, db) -> None:
+    async def _migrate_add_current_attempt(self, db: aiosqlite.Connection) -> None:
         """Add jobs.current_attempt to databases created before B2."""
         async with db.execute("PRAGMA table_info(jobs)") as cursor:
             columns = {row[1] for row in await cursor.fetchall()}
@@ -135,9 +137,9 @@ class Persistence:
                 "SELECT current_attempt FROM jobs WHERE name = ?", (name,)
             ) as cursor:
                 row = await cursor.fetchone()
-                return int(row[0]) if row else 1
+                return int(row[0]) if row else 0 if row else 1
 
-    async def upsert_job(self, name: str, definition: JobDefinition):
+    async def upsert_job(self, name: str, definition: JobDefinition) -> None:
         """Insert or update a job definition."""
         definition_json = definition.model_dump_json()
         async with aiosqlite.connect(self.db_path) as db:
@@ -151,7 +153,7 @@ class Persistence:
             ''', (name, definition_json, JobState.DEFINED, definition.priority))
             await db.commit()
 
-    async def handle_removed_job(self, name: str):
+    async def handle_removed_job(self, name: str) -> None:
         """Handle job removal: transition queued to blocked, let running finish."""
         async with aiosqlite.connect(self.db_path) as db:
             async with db.execute("SELECT state FROM jobs WHERE name = ?", (name,)) as cursor:
@@ -184,7 +186,7 @@ class Persistence:
                 rows = await cursor.fetchall()
                 return {row['name']: {'state': JobState(row['state']), 'definition': json.loads(row['definition'])} for row in rows}
 
-    async def update_job_state(self, name: str, state: JobState):
+    async def update_job_state(self, name: str, state: JobState) -> None:
         """Transition a job, rejecting illegal and racing transitions.
 
         The write is a compare-and-swap against the state that was read.
@@ -222,7 +224,7 @@ class Persistence:
         if (from_state, to_state) not in self.VALID_TRANSITIONS:
             raise InvalidTransitionError(job_name, from_state, to_state)
 
-    async def revalidate_jobs(self, current_snapshot: Dict[str, JobDefinition]):
+    async def revalidate_jobs(self, current_snapshot: Dict[str, JobDefinition]) -> None:
         """
         Re-evaluate all jobs in DB (waiting, queued, blocked_unresolvable)
         against the current graph snapshot.
@@ -332,7 +334,7 @@ class Persistence:
                 pass
         return orphaned
 
-    async def age_queued_priorities(self):
+    async def age_queued_priorities(self) -> None:
         """Increment priority of all queued jobs (priority aging)."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -394,7 +396,7 @@ class Persistence:
                 "SELECT COUNT(*) FROM job_runs WHERE state = ?", (state.value,)
             ) as cursor:
                 row = await cursor.fetchone()
-                return int(row[0])
+                return int(row[0]) if row else 0
 
     async def finalize_orphaned_runs(self) -> int:
         """Close out runs left mid-flight by a previous daemon lifetime.
@@ -451,7 +453,7 @@ class Persistence:
                 row = await cursor.fetchone()
                 return JobState(row[0]) if row else None
 
-    async def record_run(self, run):
+    async def record_run(self, run: 'JobRun') -> None:
         """Record a new job run in the database."""
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute(
@@ -465,7 +467,7 @@ class Persistence:
 
     async def finalize_run(
         self, run_id: str, state: 'JobState', exit_code: Optional[int]
-    ):
+    ) -> str:
         """Finalize a job run with end state and exit code."""
         import time
         end_time = time.strftime('%Y-%m-%d %H:%M:%S')

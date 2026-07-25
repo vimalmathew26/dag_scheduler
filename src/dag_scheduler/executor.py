@@ -2,7 +2,7 @@ import asyncio
 import logging
 import time
 import uuid
-from typing import Optional, Tuple
+from typing import TYPE_CHECKING, List, Optional, Tuple
 
 from . import metrics
 from .config import (
@@ -18,6 +18,9 @@ from .logging_setup import for_run
 from .persistence import Persistence
 from .retry_engine import RetryEngine
 
+if TYPE_CHECKING:
+    from .scheduler import Scheduler
+
 logger = logging.getLogger(__name__)
 
 class Executor:
@@ -32,13 +35,13 @@ class Executor:
         self.process_manager = process_manager
         self.log_store = log_store
         self.retry_engine = retry_engine
-        self.scheduler = None  # Set via set_scheduler() for fan-out callbacks
+        self.scheduler: Optional['Scheduler'] = None
         self.semaphore = asyncio.Semaphore(MAX_CONCURRENT)
 
-    def set_retry_engine(self, retry_engine: RetryEngine):
+    def set_retry_engine(self, retry_engine: RetryEngine) -> None:
         self.retry_engine = retry_engine
 
-    def set_scheduler(self, scheduler):
+    def set_scheduler(self, scheduler: 'Scheduler') -> None:
         """Wire the executor back to the scheduler so completed jobs
         can trigger fan-out of downstream dependents."""
         self.scheduler = scheduler
@@ -51,7 +54,9 @@ class Executor:
         """
         return self.semaphore.locked()
 
-    async def run_job(self, job_name: str, definition: JobDefinition, attempt: int = 1):
+    async def run_job(
+        self, job_name: str, definition: JobDefinition, attempt: int = 1
+    ) -> None:
         """
         Executes a job within the concurrency limit and enforces a timeout.
 
@@ -125,8 +130,10 @@ class Executor:
                     # Always mark FAILED first so the state machine is consistent
                     await self.persistence.update_job_state(job_name, JobState.FAILED)
                     # Then let retry engine decide whether to re-enqueue
-                    if self.retry_engine:
-                        await self.retry_engine.handle_retry(definition, job_run, exit_code)
+                    if self.retry_engine and exit_code is not None:
+                        await self.retry_engine.handle_retry(
+                            definition, job_run, exit_code
+                        )
 
             except Exception as e:
                 log.error(f"Unexpected error: {e}", exc_info=True)
@@ -191,7 +198,12 @@ class Executor:
         finally:
             await self.process_manager.unregister_process(run_id)
 
-    async def _stream_log(self, run_id: str, stream_name: str, stream_reader: Optional[asyncio.StreamReader]):
+    async def _stream_log(
+        self,
+        run_id: str,
+        stream_name: str,
+        stream_reader: Optional[asyncio.StreamReader],
+    ) -> None:
         """Read a stream to EOF, writing to the log store in batches.
 
         Lines were written one at a time, each opening a connection and
@@ -202,10 +214,10 @@ class Executor:
         if not stream_reader:
             return
 
-        buffer = []
+        buffer: List[Tuple[str, str]] = []
         last_flush = time.monotonic()
 
-        async def flush():
+        async def flush() -> None:
             nonlocal buffer, last_flush
             if buffer:
                 await self.log_store.store_log_chunks(run_id, buffer)

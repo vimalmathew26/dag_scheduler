@@ -58,3 +58,33 @@ where = ["src"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src/dag_scheduler"]
+ignore_missing_imports = true
+disallow_untyped_defs = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true
+# Deliberately not --strict. At that level the remaining errors are almost
+# all Any propagation out of aiosqlite and pydantic, and satisfying them
+# would mean scattering type: ignore comments, which reads worse than not
+# claiming the strictness at all.
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "C4", "SIM"]
+ignore = [
+    "E501",     # line length is reported by the formatter, not the linter
+    "B008",     # FastAPI's Depends() in defaults is the framework's idiom
+    "SIM108",   # ternaries are not always clearer than an if
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["B011"]

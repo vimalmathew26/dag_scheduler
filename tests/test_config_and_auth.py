@@ -94,10 +94,13 @@ class TestRetryDefaultsHaveOneHome:
 
 
 class TestTokenGate:
-    async def _client(self, persistence, token):
+    async def _client(self, persistence, token, monkeypatch):
+        # Deliberately not importlib.reload here. Reloading the api module
+        # rebinds `app` in the module dict while other test modules still
+        # hold the original object, so init_api configures one app and the
+        # client exercises another.
         import dag_scheduler.api as api_module
-        importlib.reload(api_module)
-        api_module.API_TOKEN = token
+        monkeypatch.setattr(api_module, "API_TOKEN", token)
 
         from dag_scheduler.log_store import LogStore
         from dag_scheduler.process_manager import ProcessManager
@@ -127,8 +130,10 @@ class TestTokenGate:
     @pytest.mark.parametrize("path", [
         "/jobs/x/trigger", "/jobs/x/cancel", "/jobs/x/reset",
     ])
-    async def test_mutating_routes_reject_a_missing_token(self, persistence, path):
-        api_module = await self._client(persistence, "s3cret")
+    async def test_mutating_routes_reject_a_missing_token(
+        self, persistence, path, monkeypatch
+    ):
+        api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             assert (await c.post(path)).status_code == 401
@@ -136,15 +141,17 @@ class TestTokenGate:
     @pytest.mark.parametrize("path", [
         "/jobs/x/trigger", "/jobs/x/cancel", "/jobs/x/reset",
     ])
-    async def test_mutating_routes_reject_a_wrong_token(self, persistence, path):
-        api_module = await self._client(persistence, "s3cret")
+    async def test_mutating_routes_reject_a_wrong_token(
+        self, persistence, path, monkeypatch
+    ):
+        api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             r = await c.post(path, headers={"Authorization": "Bearer nope"})
             assert r.status_code == 401
 
-    async def test_a_correct_token_passes_the_gate(self, persistence):
-        api_module = await self._client(persistence, "s3cret")
+    async def test_a_correct_token_passes_the_gate(self, persistence, monkeypatch):
+        api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             r = await c.post(
@@ -155,14 +162,14 @@ class TestTokenGate:
             assert r.status_code == 404
 
     @pytest.mark.parametrize("path", ["/health", "/jobs", "/stats"])
-    async def test_reads_stay_open(self, persistence, path):
-        api_module = await self._client(persistence, "s3cret")
+    async def test_reads_stay_open(self, persistence, path, monkeypatch):
+        api_module = await self._client(persistence, "s3cret", monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             assert (await c.get(path)).status_code == 200
 
-    async def test_no_token_configured_means_no_gate(self, persistence):
-        api_module = await self._client(persistence, None)
+    async def test_no_token_configured_means_no_gate(self, persistence, monkeypatch):
+        api_module = await self._client(persistence, None, monkeypatch)
         transport = ASGITransport(app=api_module.app)
         async with AsyncClient(transport=transport, base_url="http://t") as c:
             assert (await c.post("/jobs/x/trigger")).status_code == 404

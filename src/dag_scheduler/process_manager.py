@@ -4,7 +4,10 @@ import asyncio
 import logging
 import os
 import signal
-from typing import Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Optional, Set
+
+if TYPE_CHECKING:
+    from .persistence import Persistence
 from .models import JobState
 from .config import GRACEFUL_KILL_TIMEOUT
 
@@ -13,19 +16,21 @@ logger = logging.getLogger(__name__)
 class ProcessManager:
     """Tracks live subprocess handles and manages crash recovery state transitions."""
 
-    def __init__(self, persistence):
+    def __init__(self, persistence: 'Persistence') -> None:
         self.persistence = persistence
         self.processes: Dict[str, asyncio.subprocess.Process] = {}  # run_id -> process
         self.job_to_run: Dict[str, str] = {}  # job_name -> current run_id
         self._lock = asyncio.Lock()
 
-    async def register_process(self, job_name: str, run_id: str, process: asyncio.subprocess.Process):
+    async def register_process(
+        self, job_name: str, run_id: str, process: asyncio.subprocess.Process
+    ) -> None:
         """Register a running subprocess."""
         async with self._lock:
             self.processes[run_id] = process
             self.job_to_run[job_name] = run_id
 
-    async def unregister_process(self, run_id: str):
+    async def unregister_process(self, run_id: str) -> None:
         """Unregister a completed subprocess."""
         async with self._lock:
             self.processes.pop(run_id, None)
@@ -37,7 +42,7 @@ class ProcessManager:
         async with self._lock:
             return self.processes.get(job_run_id)
 
-    async def handle_crash_recovery(self):
+    async def handle_crash_recovery(self) -> None:
         """On daemon startup, mark all RUNNING jobs as UNKNOWN.
 
         At startup no subprocesses are tracked, so any job still recorded as

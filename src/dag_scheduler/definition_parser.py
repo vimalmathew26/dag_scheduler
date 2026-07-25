@@ -2,7 +2,7 @@ import yaml
 import tomllib
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 from .models import JobDefinition, DefinitionFile, RetryPolicy
 from .dag import topological_sort, CycleError
 
@@ -10,7 +10,12 @@ logger = logging.getLogger(__name__)
 
 class ParseError(Exception):
     """Raised when a job definition file fails validation."""
-    def __init__(self, message: str, file_path: Path = None, line: int = None):
+    def __init__(
+        self,
+        message: str,
+        file_path: Optional[Path] = None,
+        line: Optional[int] = None,
+    ) -> None:
         self.file_path = file_path
         self.line = line
         prefix = f"[{file_path}:{line}] " if file_path and line else f"[{file_path}] " if file_path else ""
@@ -30,7 +35,7 @@ def load_file(path: Path) -> Dict[str, Any]:
         raise ParseError(f"Failed to read file: {e}", file_path=path)
 
 class DefinitionParser:
-    def __init__(self):
+    def __init__(self) -> None:
         self.all_jobs: Dict[str, JobDefinition] = {}
         self.job_to_file: Dict[str, Path] = {}
         self.parsed_files: List[Path] = []

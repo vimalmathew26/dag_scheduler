@@ -10,7 +10,7 @@ rather than something to grep out of prose.
 import json
 import logging
 import sys
-from typing import Any, Dict, Optional
+from typing import Any, Dict, MutableMapping, Optional, Tuple
 
 # Attributes present on every LogRecord, so anything else was added by us.
 _STANDARD = set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {
@@ -39,15 +39,17 @@ class JsonFormatter(logging.Formatter):
 class JobLogAdapter(logging.LoggerAdapter):
     """Binds job, run and attempt to every record emitted through it."""
 
-    def process(self, msg, kwargs):
-        extra = dict(self.extra)
+    def process(
+        self, msg: Any, kwargs: MutableMapping[str, Any]
+    ) -> Tuple[Any, MutableMapping[str, Any]]:
+        extra: Dict[str, Any] = dict(self.extra or {})
         extra.update(kwargs.get("extra") or {})
         kwargs["extra"] = extra
-        run_id = self.extra.get("run_id")
-        prefix = f"[{self.extra.get('job')}"
+        run_id = extra.get("run_id")
+        prefix = f"[{extra.get('job')}"
         if run_id:
             prefix += f" run={str(run_id)[:8]}"
-        attempt = self.extra.get("attempt")
+        attempt = extra.get("attempt")
         if attempt is not None:
             prefix += f" attempt={attempt}"
         return f"{prefix}] {msg}", kwargs

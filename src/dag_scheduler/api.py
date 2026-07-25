@@ -48,7 +48,9 @@ def require_token(authorization: Optional[str] = Header(default=None)) -> None:
 
 # --------------- Dependency injection helpers ---------------
 
-def init_api(sched, reg, pers, logs, proc_mgr):
+def init_api(
+    sched: Any, reg: Any, pers: Any, logs: Any, proc_mgr: Any
+) -> None:
     """Initialize API with dependencies stored on app.state."""
     app.state.scheduler = sched
     app.state.registry = reg
@@ -58,22 +60,22 @@ def init_api(sched, reg, pers, logs, proc_mgr):
     app.state.db_path = pers.db_path
 
 
-def _get_scheduler(request: Request):
+def _get_scheduler(request: Request) -> Any:
     return request.app.state.scheduler
 
-def _get_registry(request: Request):
+def _get_registry(request: Request) -> Any:
     return request.app.state.registry
 
-def _get_persistence(request: Request):
+def _get_persistence(request: Request) -> Any:
     return request.app.state.persistence
 
-def _get_log_store(request: Request):
+def _get_log_store(request: Request) -> Any:
     return request.app.state.log_store
 
-def _get_process_manager(request: Request):
+def _get_process_manager(request: Request) -> Any:
     return request.app.state.process_manager
 
-def _get_db_path(request: Request):
+def _get_db_path(request: Request) -> Any:
     """The database this daemon instance was started against.
 
     Routes used to open the module-global config.DB_PATH directly, which
@@ -83,12 +85,12 @@ def _get_db_path(request: Request):
 
 
 @app.get("/")
-async def root():
+async def root() -> Dict[str, str]:
     return {"message": "DAG Scheduler API"}
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> Dict[str, str]:
     """Daemon alive check"""
     return {"status": "ok"}
 
@@ -97,7 +99,7 @@ async def health_check():
 async def list_jobs(
     state: Optional[JobState] = Query(None, description="Filter by job state"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
-    db_path=Depends(_get_db_path),
+    db_path: Any = Depends(_get_db_path),
 ) -> List[Dict[str, Any]]:
     """List all jobs with current state, filter by state and tag"""
     try:
@@ -138,7 +140,7 @@ async def list_jobs(
 @app.get("/jobs/{job_id}")
 async def get_job_detail(
     job_id: str,
-    db_path=Depends(_get_db_path),
+    db_path: Any = Depends(_get_db_path),
 ) -> Dict[str, Any]:
     """Get single job detail + last run summary"""
     try:
@@ -188,7 +190,7 @@ async def get_job_detail(
 @app.get("/jobs/{job_id}/runs")
 async def get_job_runs(
     job_id: str,
-    db_path=Depends(_get_db_path),
+    db_path: Any = Depends(_get_db_path),
 ) -> List[Dict[str, Any]]:
     """Get run history for a job"""
     try:
@@ -227,8 +229,8 @@ async def get_job_runs(
 async def get_run_logs(
     job_id: str,
     run_id: str,
-    logs=Depends(_get_log_store),
-    db_path=Depends(_get_db_path),
+    logs: Any = Depends(_get_log_store),
+    db_path: Any = Depends(_get_db_path),
 ) -> List[Dict[str, Any]]:
     """Get stdout/stderr for a run"""
     try:
@@ -256,8 +258,8 @@ async def get_run_logs(
 @app.post("/jobs/{job_id}/trigger", dependencies=[Depends(require_token)])
 async def trigger_job(
     job_id: str,
-    reg=Depends(_get_registry),
-    sched=Depends(_get_scheduler),
+    reg: Any = Depends(_get_registry),
+    sched: Any = Depends(_get_scheduler),
 ) -> Dict[str, str]:
     """Force-queue a job bypassing dependency check (manual trigger)"""
     try:
@@ -280,9 +282,9 @@ async def trigger_job(
 @app.post("/jobs/{job_id}/cancel", dependencies=[Depends(require_token)])
 async def cancel_job(
     job_id: str,
-    pers=Depends(_get_persistence),
-    proc_mgr=Depends(_get_process_manager),
-    db_path=Depends(_get_db_path),
+    pers: Any = Depends(_get_persistence),
+    proc_mgr: Any = Depends(_get_process_manager),
+    db_path: Any = Depends(_get_db_path),
 ) -> Dict[str, str]:
     """Cancel a queued or running job"""
     try:
@@ -333,7 +335,7 @@ async def cancel_job(
 
 
 @app.get("/metrics", response_class=PlainTextResponse)
-async def get_metrics(db_path=Depends(_get_db_path)) -> str:
+async def get_metrics(db_path: Any = Depends(_get_db_path)) -> str:
     """Prometheus text exposition of process counters and queue gauges."""
     async with aiosqlite.connect(db_path) as db:
         async with db.execute(
@@ -348,7 +350,7 @@ async def get_metrics(db_path=Depends(_get_db_path)) -> str:
 
 
 @app.get("/stats")
-async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
+async def get_statistics(db_path: Any = Depends(_get_db_path)) -> Dict[str, Any]:
     """Get aggregate statistics"""
     try:
         async with aiosqlite.connect(db_path) as db:
@@ -362,8 +364,8 @@ async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
                 FROM job_runs
             """) as cursor:
                 stats_row = await cursor.fetchone()
-                total_runs = stats_row['total_runs'] or 0
-                passed_runs = stats_row['passed_runs'] or 0
+                total_runs = (stats_row['total_runs'] if stats_row else 0) or 0
+                passed_runs = (stats_row['passed_runs'] if stats_row else 0) or 0
                 pass_rate = passed_runs / total_runs if total_runs > 0 else 0
 
             # Get average duration
@@ -373,7 +375,7 @@ async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
                 WHERE end_time IS NOT NULL
             """) as cursor:
                 duration_row = await cursor.fetchone()
-                avg_duration = duration_row['avg_duration'] or 0
+                avg_duration = (duration_row['avg_duration'] if duration_row else 0) or 0
 
             # Get jobs by state
             async with db.execute("""
@@ -398,7 +400,7 @@ async def get_statistics(db_path=Depends(_get_db_path)) -> Dict[str, Any]:
 @app.post("/jobs/{job_id}/reset", dependencies=[Depends(require_token)])
 async def reset_job(
     job_id: str,
-    pers=Depends(_get_persistence),
+    pers: Any = Depends(_get_persistence),
 ) -> Dict[str, str]:
     """Reset a job in a terminal state (done/failed/timed_out/unknown/cancelled) back to defined."""
     try:
