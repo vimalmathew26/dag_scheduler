@@ -94,15 +94,73 @@ class TestFileWatcherDebounce:
             await asyncio.sleep(0.02)
 
         await asyncio.sleep(0.5)
-        # Documents current behaviour, which does not match the README's
-        # claim that edits are coalesced. See FINDINGS.md F5: the debounce
-        # task's finally clause pops whichever task is registered for the
-        # path rather than itself, so it deregisters its own replacement and
-        # several reloads fire. Five rapid edits produce three reloads.
-        assert len(reloads) > 1, (
-            "if this now passes with one reload, F5 has been fixed and this "
-            "test should assert coalescing instead"
+        assert reloads == [1], (
+            f"five edits within the debounce window must produce one reload, got {len(reloads)}"
         )
+
+    async def test_edits_further_apart_than_the_window_each_reload(self, tmp_path):
+        reloads = []
+
+        class FakeRegistry:
+            async def reload(self):
+                reloads.append(1)
+
+        watcher = FileWatcher(FakeRegistry(), tmp_path, debounce_delay=0.1)
+
+        class Event:
+            def __init__(self, path):
+                self.src_path = str(path)
+                self.is_directory = False
+
+        target = tmp_path / "a.yaml"
+        for _ in range(3):
+            await watcher._handle_event(Event(target))
+            await asyncio.sleep(0.25)
+
+        await asyncio.sleep(0.3)
+        assert len(reloads) == 3, "debouncing must not swallow separate edits"
+
+    async def test_edits_to_different_files_are_debounced_independently(self, tmp_path):
+        reloads = []
+
+        class FakeRegistry:
+            async def reload(self):
+                reloads.append(1)
+
+        watcher = FileWatcher(FakeRegistry(), tmp_path, debounce_delay=0.15)
+
+        class Event:
+            def __init__(self, path):
+                self.src_path = str(path)
+                self.is_directory = False
+
+        await watcher._handle_event(Event(tmp_path / "a.yaml"))
+        await watcher._handle_event(Event(tmp_path / "b.yaml"))
+        await asyncio.sleep(0.4)
+
+        assert len(reloads) == 2
+
+    async def test_the_debounce_registry_is_emptied(self, tmp_path):
+        """A leaked entry is what caused the coalescing bug."""
+        reloads = []
+
+        class FakeRegistry:
+            async def reload(self):
+                reloads.append(1)
+
+        watcher = FileWatcher(FakeRegistry(), tmp_path, debounce_delay=0.1)
+
+        class Event:
+            def __init__(self, path):
+                self.src_path = str(path)
+                self.is_directory = False
+
+        for _ in range(4):
+            await watcher._handle_event(Event(tmp_path / "a.yaml"))
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0.4)
+
+        assert watcher._debounce_tasks == {}
 
     async def test_non_definition_files_are_ignored(self, tmp_path):
         reloads = []

@@ -109,8 +109,16 @@ class FileWatcher:
             metrics.increment("dag_reload_failures_total")
             logger.error(f"Error during registry reload: {e}")
         finally:
-            # Clean up the task reference
-            self._debounce_tasks.pop(file_path, None)
+            # Only deregister if this task is still the registered one.
+            #
+            # This used to pop unconditionally. A cancelled task's finally
+            # clause runs after _handle_event has already registered its
+            # replacement, so the cancelled task deregistered the task that
+            # superseded it. The next event then saw no registered task,
+            # created a third, and the orphaned second one still fired.
+            # Five edits 20ms apart produced three reloads instead of one.
+            if self._debounce_tasks.get(file_path) is asyncio.current_task():
+                self._debounce_tasks.pop(file_path, None)
 
 
 class _FileSystemHandler(FileSystemEventHandler):
