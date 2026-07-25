@@ -2,7 +2,7 @@ import yaml
 import tomllib
 import logging
 from pathlib import Path
-from typing import Dict, Any, List, Set
+from typing import Any, Dict, List, Set, Tuple
 from .models import JobDefinition, DefinitionFile, RetryPolicy
 from .dag import topological_sort, CycleError
 from .config import DEFAULT_TIMEOUT, DEFAULT_RETRY, DEFAULT_BACKOFF_BASE, DEFAULT_JITTER, DEFAULT_RETRY_ON_EXIT_CODES
@@ -34,6 +34,8 @@ class DefinitionParser:
     def __init__(self):
         self.all_jobs: Dict[str, JobDefinition] = {}
         self.job_to_file: Dict[str, Path] = {}
+        self.parsed_files: List[Path] = []
+        self.rejected: Dict[str, str] = {}
 
     def parse_directory(self, directory: Path) -> Dict[str, JobDefinition]:
         """
@@ -42,12 +44,22 @@ class DefinitionParser:
         Files with errors (bad syntax, duplicate names, cycles) are skipped
         with a warning so that valid jobs from other files still load.
         """
-        files = list(directory.glob("*.yaml")) + list(directory.glob("*.yml")) + list(directory.glob("*.toml"))
-        
-        # Pass 1: Collect all job names and perform basic structure validation.
-        # Files that fail are skipped entirely so one bad file doesn't block the rest.
+        # Sorted so the result never depends on filesystem enumeration
+        # order.  It previously did, and decided which of two conflicting
+        # files survived.
+        files = sorted(
+            list(directory.glob("*.yaml"))
+            + list(directory.glob("*.yml"))
+            + list(directory.glob("*.toml"))
+        )
+        self.parsed_files = list(files)
+
+        # Pass 1: read every file and collect each declaration with the file
+        # it came from, so a name declared more than once can be recognised
+        # as a conflict rather than a race between files.
         raw_definitions: Dict[str, Dict[str, Any]] = {}
-        
+        declarations: Dict[str, List[Tuple[Path, Dict[str, Any]]]] = {}
+
         for path in files:
             try:
                 data = load_file(path)
@@ -57,23 +69,15 @@ class DefinitionParser:
 
             if "jobs" not in data:
                 continue
-            
+
             file_valid = True
             file_jobs: Dict[str, Dict[str, Any]] = {}
             for job_name, job_dict in data["jobs"].items():
-                if job_name in self.job_to_file:
-                    logger.warning(
-                        f"Skipping file {path}: duplicate job name '{job_name}' "
-                        f"(already defined in {self.job_to_file[job_name]})"
-                    )
-                    file_valid = False
-                    break
-                
                 if not isinstance(job_dict, dict):
                     logger.warning(f"Skipping file {path}: job '{job_name}' definition must be a dictionary")
                     file_valid = False
                     break
-                
+
                 if "command" not in job_dict:
                     logger.warning(f"Skipping file {path}: job '{job_name}' missing required 'command' field")
                     file_valid = False
@@ -85,8 +89,33 @@ class DefinitionParser:
                 continue
 
             for name, jdict in file_jobs.items():
-                raw_definitions[name] = jdict
-                self.job_to_file[name] = path
+                declarations.setdefault(name, []).append((path, jdict))
+
+        # A name declared in more than one file is rejected on every side.
+        # Keeping one of them would need an arbitrary precedence rule, and
+        # the old rule was "whichever file the filesystem listed first",
+        # which silently substituted the wrong command.  Rejecting both is
+        # deterministic, and it keeps the blast radius equal to the scope of
+        # the error: a name collision is an error about that name, not about
+        # the files that happen to contain it.  This also makes pass 1
+        # consistent with pass 3, which drops cycle participants per job
+        # rather than discarding whole files.
+        for name, declared in declarations.items():
+            if len(declared) > 1:
+                paths = ", ".join(str(path) for path, _ in declared)
+                logger.warning(
+                    f"Rejecting all {len(declared)} definitions of job '{name}': "
+                    f"declared in multiple files ({paths}). Remove the duplicate "
+                    f"and the job will load."
+                )
+                self.rejected[name] = (
+                    f"declared in multiple files ({paths})"
+                )
+                continue
+
+            path, jdict = declared[0]
+            raw_definitions[name] = jdict
+            self.job_to_file[name] = path
 
         # Pass 2: Validate dependency references and construct JobDefinition objects.
         # Jobs with invalid deps are removed, and removal cascades to their dependents.

@@ -456,3 +456,37 @@ Worse than the audit recorded. A two-line file took the job count from 7 to
 cascaded out behind it, and the surviving `extract_data` is the *intruder's*
 definition, not the real one. The blast radius of a one-name collision was
 four unrelated jobs plus a silent substitution of the wrong command.
+
+### AFTER
+
+```
+### job count after
+(2,)
+('always_fails',) ('slow_job',)
+
+WARNING - Rejecting all 2 definitions of job 'extract_data': declared in
+multiple files (.../jobs/dup.yaml, .../jobs/etl.yaml). Remove the
+duplicate and the job will load.
+```
+
+### Fix, per DECISION 1
+
+Both definitions of the colliding name are rejected. The count is now 2
+rather than 3, which is numerically lower than the before-state and is the
+correct outcome: `extract_data` is genuinely ambiguous, so it does not
+load at all, and the four jobs downstream of it cascade out because their
+dependency is unresolvable. What is gone is the silent substitution. The
+old behaviour resolved `extract_data` to `echo duplicate`, the intruder's
+command, and would have run it.
+
+The two survivors are exactly the jobs with no relationship to the
+collision, which is the property DECISION 1 asks for. In the unit tests,
+where the colliding files also carry unrelated jobs, every one of those
+survives.
+
+Which file used to win was decided by `directory.glob()` enumeration
+order. Files are now parsed in sorted order, so the outcome is
+reproducible, and a test asserts two parses of the same directory agree.
+
+The warning names the job and every conflicting path, and says what to do
+about it.
