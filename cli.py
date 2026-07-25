@@ -78,8 +78,10 @@ def logs(name):
             click.echo(f"No runs found for job '{name}'")
             return
         
-        # Get the most recent run (assuming it's the last one)
-        latest_run = runs[-1]
+        # /jobs/{name}/runs is ordered newest first, so the most recent run
+        # is the first element.  This used to take runs[-1], which is the
+        # oldest, so `logs` showed the first run rather than the latest.
+        latest_run = runs[0]
         run_id = latest_run['run_id']
         
         # Now get the logs for that run

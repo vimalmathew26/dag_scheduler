@@ -1,33 +1,135 @@
 # DAG Scheduler
 
-## Overview
+A single-node job scheduler daemon. You describe jobs and their dependencies
+in YAML or TOML, drop the files in a directory, and the daemon runs them in
+dependency order as subprocesses, with retries, timeouts, priority, a REST
+API and a CLI.
 
-This is a **DAG-based task scheduler daemon** written in Python (≥3.11). It manages job definitions with dependencies, executes them as subprocesses, and supports hot-reloading, retries, priority aging, and a REST API. The entry point is `dag-scheduler`, which maps to `dag_scheduler.__main__:main`.
+It exists to occupy the gap between cron and a distributed workflow engine.
+Cron has no concept of one job depending on another, and no memory of
+whether last night's run succeeded. Airflow and its peers answer that, and
+bring a scheduler process, a metadata database, a web server and a
+deployment story with them. This is the smallest thing that still gives you
+a dependency graph, bounded retries, timeout enforcement and a record of
+what happened: one process, one SQLite file, no broker.
+
+Requires Python 3.11 or newer, for `tomllib`.
+
+---
+
+## Install and run
+
+```bash
+git clone https://github.com/vimalmathew26/dag_scheduler
+cd dag_scheduler
+python -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+```
+
+Start the daemon. It listens on `127.0.0.1:8000` and loads job definitions
+from the `jobs/` directory:
+
+```bash
+dag-scheduler daemon
+```
+
+In a second terminal, run the example pipeline:
+
+```bash
+dag-scheduler status
+dag-scheduler trigger extract_data
+dag-scheduler status
+```
+
+`extract_data` runs, then `transform_data`, then `load_data`, then
+`cleanup_logs` and `archive_old` from a second file. Each becomes `queued`,
+then `running`, then `done`, and completing unblocks whatever depends on it.
+
+```bash
+dag-scheduler runs extract_data     # run history with attempt numbers
+dag-scheduler logs extract_data     # stdout and stderr of the latest run
+dag-scheduler stats                 # pass rate and job counts
+```
+
+Three of the shipped definitions exist to demonstrate failure handling:
+
+```bash
+dag-scheduler trigger always_fails  # exits 1, retries exactly 3 times with backoff
+dag-scheduler trigger slow_job      # sleeps 30s with a 2s timeout, killed and marked timed_out
+```
+
+`jobs/cycle.yaml` declares a mutual dependency. It is rejected at load time
+and you will see the rejection in the daemon log; neither job appears in
+`dag-scheduler status`.
+
+### Where state lives
+
+The database is at `$XDG_DATA_HOME/dag_scheduler/scheduler.db`, defaulting to
+`~/.local/share/dag_scheduler/scheduler.db`. Delete that file to start clean.
+
+This directory was called `genie_dag` in earlier versions. If you have an
+old database, either move it or let a new one be created.
+
+### Running the tests
+
+```bash
+pytest                       # 380 tests
+ruff check . && mypy .
+```
+
+---
+
+## Writing a job definition
+
+```yaml
+jobs:
+  extract_data:
+    command: "echo extract_data && exit 0"
+    depends_on: []
+    tags: ["etl", "daily"]
+    priority: 5
+    timeout: 120
+    retry:
+      max_attempts: 3
+      backoff_base: 2.0
+      jitter: true
+      retry_on_exit_codes: [1, 2]
+```
+
+`command` is the only required field. Job names live in one flat namespace
+across every file in the directory, so `depends_on` can reference a job
+defined in another file, in either format.
+
+Changes to the directory are picked up without a restart. A name defined in
+two files is rejected on both sides rather than one winning arbitrarily, and
+a job whose dependency cannot be resolved does not load.
+
+**Job definitions are executed as shell commands by the daemon's user.**
+Anyone who can write to the jobs directory can run arbitrary code. That, not
+the API, is the privilege boundary worth thinking about.
 
 ---
 
 ## Architecture
 
-The system is composed of the following core components, wired together in the `Daemon` class:
-
 | Component | File | Responsibility |
 |---|---|---|
-| **Daemon** | __main__.py | Bootstraps all components, manages lifecycle and signal handling |
-| **Persistence** | persistence.py | SQLite (WAL mode) storage for jobs, runs, and logs; enforces state machine transitions |
-| **Registry** | registry.py | In-memory job namespace; handles atomic hot-reload swaps and diffing |
-| **DefinitionParser** | definition_parser.py | Parses YAML/TOML job files in two passes with cycle detection |
-| **DAG** | dag.py | Topological sort (Kahn's algorithm), cycle detection, dependency fan-out |
-| **Scheduler** | scheduler.py | Main polling loop; dispatches queued jobs, manages priority aging |
-| **Executor** | executor.py | Runs subprocesses with concurrency semaphore, timeout enforcement, log streaming |
-| **RetryEngine** | retry_engine.py | Exponential backoff with jitter; decides whether to retry based on exit codes |
-| **ProcessManager** | process_manager.py | Tracks live subprocess handles; crash recovery (marks orphaned jobs as `unknown`) |
-| **LogStore** | log_store.py | Stores and retrieves stdout/stderr chunks per job run |
-| **FileWatcher** | file_watcher.py | Watches jobs directory via `watchdog`; debounces and triggers registry reload |
-| **API** | api.py | FastAPI REST endpoints for status, triggering, cancellation, logs, and stats |
-| **CLI** | cli.py | Click-based CLI that talks to the API (`status`, `trigger`, `logs`, `runs`, `stats`, `cancel`, `load`) |
-| **Config** | config.py | Central constants (paths, concurrency, defaults, ports) |
+| **Daemon** | `__main__.py` | Bootstraps all components, manages lifecycle and signal handling |
+| **Persistence** | `persistence.py` | SQLite (WAL mode) storage for jobs, runs, and logs; enforces state machine transitions |
+| **Registry** | `registry.py` | In-memory job namespace; handles hot-reload swaps and diffing |
+| **DefinitionParser** | `definition_parser.py` | Parses YAML/TOML job files in three passes with cycle detection |
+| **DAG** | `dag.py` | Topological sort (Kahn's algorithm), cycle detection, dependency fan-out |
+| **Scheduler** | `scheduler.py` | Main polling loop; claims and dispatches queued jobs, manages priority aging |
+| **Executor** | `executor.py` | Runs subprocesses with concurrency semaphore, timeout enforcement, log streaming |
+| **RetryEngine** | `retry_engine.py` | Exponential backoff with jitter; decides whether to retry based on exit codes |
+| **ProcessManager** | `process_manager.py` | Tracks live subprocess handles; crash recovery; process group termination |
+| **LogStore** | `log_store.py` | Stores and retrieves stdout/stderr chunks per job run |
+| **FileWatcher** | `file_watcher.py` | Watches the jobs directory via `watchdog` and triggers registry reload |
+| **API** | `api.py` | FastAPI REST endpoints for status, triggering, cancellation, logs, and stats |
+| **CLI** | `cli.py` | Click-based CLI that talks to the API |
+| **Config** | `config.py` | Central constants (paths, concurrency, defaults, ports) |
 
-### Component Dependency Graph
+### Component dependency graph
 
 ```
 Daemon
@@ -44,141 +146,177 @@ Daemon
 
 ---
 
-## Data Model
+## Data model
 
-Defined in models.py:
+Defined in `models.py`:
 
-- **`JobState`** — 9-state enum: `defined → waiting → queued → running → done|failed|timed_out|unknown|blocked_unresolvable`
-- **`RetryPolicy`** — `max_attempts`, `backoff_base`, `jitter`, `retry_on_exit_codes`
-- **`JobDefinition`** — `command`, `depends_on`, `tags`, `priority`, `timeout`, `retry`
-- **`JobRun`** — `job_name`, `run_id`, `state`, `start_time`, `end_time`, `exit_code`, `attempt`
-- **`DefinitionFile`** — Top-level wrapper with a jobs dict
+- **`JobState`** a 10-state enum: `defined`, `waiting`, `queued`, `running`,
+  `done`, `failed`, `timed_out`, `unknown`, `cancelled`,
+  `blocked_unresolvable`
+- **`RetryPolicy`** `max_attempts`, `backoff_base`, `jitter`,
+  `retry_on_exit_codes`
+- **`JobDefinition`** `command`, `depends_on`, `tags`, `priority`, `timeout`,
+  `retry`
+- **`JobRun`** `job_name`, `run_id`, `state`, `start_time`, `end_time`,
+  `exit_code`, `attempt`
+- **`DefinitionFile`** top-level wrapper with a jobs dict
 
-### State Machine
+### State machine
 
-Valid transitions are enforced by `Persistence.VALID_TRANSITIONS`:
+`Persistence.VALID_TRANSITIONS` holds all 21 legal transitions and is the
+authoritative definition. Every other ordered pair raises
+`InvalidTransitionError`, which the test suite asserts exhaustively across
+all 100 pairs.
 
 ```
-defined ──► queued / waiting
-waiting ──► queued
-queued  ──► running / blocked_unresolvable
-running ──► done / failed / timed_out / unknown
-blocked_unresolvable ──► waiting / queued
+defined              ──► queued, waiting
+waiting              ──► queued, blocked_unresolvable
+queued               ──► running, blocked_unresolvable, cancelled
+running              ──► done, failed, timed_out, unknown, cancelled
+failed               ──► queued, waiting, defined
+blocked_unresolvable ──► waiting, queued
+done                 ──► defined
+timed_out            ──► defined
+unknown              ──► defined
+cancelled            ──► defined
 ```
 
-An `InvalidTransitionError` is raised for any illegal transition.
+The transitions back to `defined` are how a terminal job becomes runnable
+again: `enqueue_job` resets before re-queueing, which is what makes both
+retries and manual re-triggers legal.
 
-### Database Schema (SQLite, WAL mode)
+`unknown` means the daemon cannot say what happened, which is distinct from
+`failed`. It is what a job becomes when the daemon dies while it was
+running.
 
-Three tables created in `Persistence.setup()`:
+### Database schema
 
 | Table | Purpose |
 |---|---|
-| jobs | Job definitions, current state, priority |
+| `jobs` | Job definitions, current state, priority, current attempt |
 | `job_runs` | Individual execution records per job |
 | `job_logs` | Stdout/stderr chunks per run |
 
 ---
 
-## Key Workflows
+## Key workflows
 
-### 1. Startup (`Daemon.run()`)
+### Startup
 
-1. Initialize DB schema (`persistence.setup()`)
-2. Crash recovery — mark orphaned `RUNNING` jobs as `UNKNOWN` (`ProcessManager.handle_crash_recovery()`)
-3. Load job definitions from jobs directory (`Registry.load_initial()`)
-4. Wire up API dependencies (`init_api()`)
-5. Start scheduler polling loop + priority aging loop
-6. Start file watcher
-7. Start Uvicorn API server
+1. Create the data directory and initialise the schema
+2. Crash recovery: mark orphaned `running` jobs `unknown`, and finalize any
+   `job_runs` rows left mid-flight by a previous lifetime
+3. Load job definitions from the jobs directory
+4. Start the scheduler polling loop and priority aging loop
+5. Start the file watcher
+6. Start the API server
 
-### 2. Job Definition Parsing (`DefinitionParser.parse_directory()`)
+### Definition parsing
 
-Three-pass approach:
-1. **Pass 1** — Collect all job names, check for duplicates and required fields
-2. **Pass 2** — Validate dependency references exist; construct `JobDefinition` objects
-3. **Pass 3** — Cycle detection via `topological_sort()` (Kahn's algorithm)
+Three passes:
 
-Supports both YAML and TOML formats. Example files: etl.yaml, maintenance.toml.
+1. Read every file in sorted order and collect each declaration with the
+   file it came from. A name declared in more than one file is rejected on
+   every side; keeping one would need an arbitrary precedence rule.
+2. Resolve dependency references. A job naming a dependency that does not
+   exist is dropped, and the removal cascades to its dependents.
+3. Cycle detection via `topological_sort`. Jobs participating in a cycle are
+   dropped individually, and removal cascades.
 
-### 3. Job Scheduling (`Scheduler._main_loop()`)
+Failures are per-job wherever possible, and are reported as warnings in the
+daemon log rather than aborting the load, so one bad definition cannot stop
+the rest from loading.
 
-- Polls for the highest-priority `QUEUED` job (`_get_next_queued_job()`)
-- Dispatches to [`Executor.run_job()`](executor.py) via `asyncio.create_task()`
-- Priority aging: every [`PRIORITY_AGING_INTERVAL`](config.py) (60s), all queued jobs get `current_priority += 1` (`_aging_loop()`)
+### Scheduling
 
-### 4. Job Execution (`Executor.run_job()`)
+The loop claims the highest-priority queued job with a single atomic
+statement that also marks it running, so a job is dispatched exactly once.
+It does not claim while the executor is at its concurrency limit
+(`MAX_CONCURRENT`, 4).
 
-1. Acquire concurrency semaphore (`MAX_CONCURRENT` = 4)
-2. Transition job to `RUNNING`
-3. Spawn subprocess via `asyncio.create_subprocess_shell()`
-4. Stream stdout/stderr to `LogStore`
-5. Enforce timeout via `asyncio.wait_for()`
-6. On success (`exit_code == 0`): mark `DONE`, trigger `handle_job_completion()` for dependency fan-out
-7. On failure: delegate to `RetryEngine.handle_retry()`
-8. On timeout: kill process, mark `TIMED_OUT`
+Priority aging increments queued jobs every `PRIORITY_AGING_INTERVAL`
+seconds.
 
-### 5. Retry Logic (`RetryEngine`)
+### Execution
 
-- [`should_retry()`](retry_engine.py): checks `attempt < max_attempts` and `exit_code ∈ retry_on_exit_codes`
-- `calculate_backoff()`: $\text{backoff} = \text{backoff\_base}^{\text{attempt}}$, with optional ±20% jitter
-- Schedules retry via `asyncio.sleep(backoff)` then re-enqueue
+1. Acquire a concurrency slot
+2. Spawn the command via `asyncio.create_subprocess_shell` in its own
+   process group
+3. Stream stdout and stderr to the log store
+4. Enforce the timeout; on expiry, SIGTERM the process group, then SIGKILL
+   after `GRACEFUL_KILL_TIMEOUT`
+5. On exit code 0, mark `done` and unblock dependents
+6. On any other exit code, mark `failed` and hand to the retry engine
 
-### 6. Hot Reload (`FileWatcher` → `Registry.reload()`)
+### Retries
 
-1. `watchdog` detects file changes in jobs
-2. Debounced (500ms) to coalesce rapid edits
-3. [`Registry.reload()`](registry.py) parses all files atomically under `_reload_lock`
-4. `_handle_diff()` computes added/removed/changed jobs
-5. Removed jobs transition `queued → blocked_unresolvable`
-6. `Persistence.revalidate_jobs()` re-checks dependency validity
+`should_retry` requires both that the attempt number is below
+`max_attempts` and that the exit code is listed in `retry_on_exit_codes`.
+Backoff is `backoff_base ** attempt`, with optional jitter of plus or minus
+20 percent. The attempt number is stored on the job, so it survives the
+round trip back through the queue.
 
-### 7. Dependency Fan-Out (`Scheduler.handle_job_completion()`)
+### Hot reload
 
-When a job completes as `DONE`:
-- [`get_ready_jobs()`](dag.py) finds direct dependents whose **all** dependencies are now `done`
-- Those jobs transition `waiting → queued`
+The file watcher triggers a reload, which reparses the directory and diffs
+the result against the current snapshot. Jobs that were removed and are
+queued or waiting become `blocked_unresolvable` rather than being deleted;
+running jobs are left to finish.
+
+### Dependency fan-out
+
+When a job finishes `done`, its direct dependents are checked. A dependent
+becomes `queued` only when every name in its `depends_on` is present in the
+current snapshot and is `done`. A dependency that no longer exists makes the
+condition unsatisfiable, not satisfied, so the dependent stays blocked.
 
 ---
 
-## API Endpoints (api.py)
+## API
+
+Served on `127.0.0.1:8000`.
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/` | Root message |
 | `GET` | `/health` | Alive check |
-| `GET` | jobs | List all jobs (filter by `state`, `tag`) |
-| `GET` | `/jobs/{job_id}` | Job detail + last run summary |
-| `GET` | `/jobs/{job_id}/runs` | Run history |
-| `GET` | `/jobs/{job_id}/runs/{run_id}/logs` | Stdout/stderr for a run |
-| `POST` | `/jobs/{job_id}/trigger` | Force-queue (bypass dependencies) |
-| `POST` | `/jobs/{job_id}/cancel` | Cancel queued/running job |
-| `GET` | `/stats` | Aggregate stats (pass rate, avg duration, jobs by state) |
+| `GET` | `/jobs` | List all jobs (filter by `state`, `tag`) |
+| `GET` | `/jobs/{job_id}` | Job detail and last run summary |
+| `GET` | `/jobs/{job_id}/runs` | Run history, newest first |
+| `GET` | `/jobs/{job_id}/runs/{run_id}/logs` | Stdout and stderr for a run |
+| `POST` | `/jobs/{job_id}/trigger` | Force-queue, bypassing dependencies |
+| `POST` | `/jobs/{job_id}/cancel` | Cancel a queued or running job |
+| `POST` | `/jobs/{job_id}/reset` | Return a terminal job to `defined` |
+| `GET` | `/stats` | Aggregate stats |
+
+`/stats` reports durations at one-second resolution, because run timestamps
+are stored to the second. Jobs that finish in under a second report a
+duration of zero.
 
 ---
 
-## CLI Commands (cli.py)
+## CLI
 
 | Command | Description |
 |---|---|
-| `dag-scheduler load <path>` | Copy definition file to jobs for hot-reload |
+| `dag-scheduler daemon` | Run the scheduler daemon in the foreground |
 | `dag-scheduler status` | Show all jobs and states |
 | `dag-scheduler trigger <name>` | Force-queue a job |
-| `dag-scheduler logs <name>` | Tail logs for most recent run |
+| `dag-scheduler cancel <name>` | Cancel a queued or running job |
+| `dag-scheduler reset <name>` | Return a terminal job to `defined` |
+| `dag-scheduler logs <name>` | Show logs for the most recent run |
 | `dag-scheduler runs <name>` | Show run history |
 | `dag-scheduler stats` | Show aggregate statistics |
-| `dag-scheduler cancel <name>` | Cancel a job |
+| `dag-scheduler load <path>` | Copy a definition file into the jobs directory |
 
 ---
 
-## Job Definition Examples
+## Example definitions
 
-**ETL Pipeline** (etl.yaml): `extract_data → transform_data → load_data` — a 3-stage chain with retries and priorities.
-
-**Maintenance** (maintenance.toml): `cleanup_logs` (depends on `load_data`) → `archive_old` — cross-file dependencies resolved via flat namespace.
-
-**Failing Job** (failing.yaml): `always_fails` — exits with code 1, retries 3 times with no jitter.
-
-**Timeout Test** (slow.yaml): `slow_job` — `sleep 30` with a 2s timeout, demonstrating timeout handling.
-
-**Cycle Detection** (cycle.yaml): `job_a ↔ job_b` — mutual dependency that triggers `CycleError` during parsing.
+| File | Demonstrates |
+|---|---|
+| `jobs/etl.yaml` | A three-stage chain: `extract_data`, `transform_data`, `load_data` |
+| `jobs/maintenance.toml` | `cleanup_logs` and `archive_old`, depending across files and formats |
+| `jobs/failing.yaml` | `always_fails` exits 1 and retries exactly 3 times with no jitter |
+| `jobs/slow.yaml` | `slow_job` sleeps 30s with a 2s timeout |
+| `jobs/cycle.yaml` | A mutual dependency, rejected at load time |
