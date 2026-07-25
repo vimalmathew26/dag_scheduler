@@ -84,8 +84,11 @@ class Scheduler:
                     await self.persistence.update_job_state(job_name, JobState.UNKNOWN)
                     continue
 
-                logger.info(f"Dispatching job '{job_name}'")
-                self._spawn(self.executor.run_job(job_name, definition))
+                attempt = await self.persistence.get_job_attempt(job_name)
+                logger.info(f"Dispatching job '{job_name}' (attempt {attempt})")
+                self._spawn(
+                    self.executor.run_job(job_name, definition, attempt=attempt)
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -106,7 +109,8 @@ class Scheduler:
             await self.persistence.update_job_state(job_name, JobState.BLOCKED_UNRESOLVABLE)
             return
 
-        # If the job is in a terminal state, reset to DEFINED first (#2, #8)
+        # If the job is in a terminal state, reset to DEFINED first so the
+        # normal forward transition is legal.
         db_jobs = await self.persistence.get_all_db_jobs()
         current_state = db_jobs.get(job_name, {}).get('state')
         terminal_states = {
@@ -115,6 +119,11 @@ class Scheduler:
         }
         if current_state in terminal_states:
             await self.persistence.reset_job_state(job_name)
+
+        # Record which attempt this dispatch represents.  This parameter
+        # used to be accepted and silently dropped, so every retry was
+        # dispatched as attempt 1 and the retry limit was never reached.
+        await self.persistence.set_job_attempt(job_name, attempt)
 
         if bypass_deps:
             await self.persistence.update_job_state(job_name, JobState.QUEUED)

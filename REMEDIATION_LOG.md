@@ -153,6 +153,33 @@ grep -c "Max retries" /tmp/repro/b2.log
 recording `attempt=1`, still queued for another attempt when the daemon was
 stopped, and the "max retries exceeded" branch never once reached.
 
+### AFTER
+
+```
+### run count
+(3,)
+### distinct attempt numbers recorded
+(1, 1)
+(2, 1)
+(3, 1)
+### final job state
+('failed',)
+### did it ever conclude?
+1
+```
+
+Exactly three runs, numbered 1, 2 and 3, then the job settles in `failed`
+and the give-up branch is reached once.
+
+### Fix
+
+The attempt number is now a column on `jobs` rather than a parameter that
+was dropped crossing the queue. `enqueue_job` writes `current_attempt`,
+which it previously accepted and ignored; the dispatch loop reads it back
+after claiming and passes it to the executor. A fresh trigger resets to 1,
+so a manual re-run is a new run rather than a continuation. Databases
+created before this change get the column by migration in `setup()`.
+
 ---
 
 ## B3: timeout marks the job but never kills the process

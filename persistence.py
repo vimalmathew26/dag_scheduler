@@ -61,10 +61,12 @@ class Persistence:
                     definition TEXT NOT NULL,
                     state TEXT NOT NULL DEFAULT 'defined',
                     current_priority INTEGER NOT NULL DEFAULT 1,
+                    current_attempt INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
+            await self._migrate_add_current_attempt(db)
             await db.execute('''
                 CREATE TABLE IF NOT EXISTS job_runs (
                     run_id TEXT PRIMARY KEY,
@@ -88,6 +90,33 @@ class Persistence:
                 )
             ''')
             await db.commit()
+
+    async def _migrate_add_current_attempt(self, db) -> None:
+        """Add jobs.current_attempt to databases created before B2."""
+        async with db.execute("PRAGMA table_info(jobs)") as cursor:
+            columns = {row[1] for row in await cursor.fetchall()}
+        if 'current_attempt' not in columns:
+            await db.execute(
+                "ALTER TABLE jobs ADD COLUMN current_attempt INTEGER NOT NULL DEFAULT 1"
+            )
+            logger.info("Migrated jobs table: added current_attempt")
+
+    async def set_job_attempt(self, name: str, attempt: int) -> None:
+        """Record which attempt the next dispatch of this job represents."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute(
+                "UPDATE jobs SET current_attempt = ? WHERE name = ?", (attempt, name)
+            )
+            await db.commit()
+
+    async def get_job_attempt(self, name: str) -> int:
+        """The attempt number the current dispatch of this job represents."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT current_attempt FROM jobs WHERE name = ?", (name,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0]) if row else 1
 
     async def upsert_job(self, name: str, definition: JobDefinition):
         """Insert or update a job definition."""
