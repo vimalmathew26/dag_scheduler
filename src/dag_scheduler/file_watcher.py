@@ -59,9 +59,14 @@ class FileWatcher:
     async def stop(self) -> None:
         """Stop watching directories.
 
+        Safe to call when start() never ran, which happens if the daemon
+        fails during startup: joining an unstarted observer thread raises.
+
         observer.join() is a blocking thread join, so it runs in an executor
         rather than stalling the event loop during shutdown.
         """
+        if not self._observer.is_alive():
+            return
         self._observer.stop()
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._observer.join)
