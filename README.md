@@ -73,7 +73,7 @@ old database, either move it or let a new one be created.
 ### Running the tests
 
 ```bash
-pytest                       # 380 tests
+pytest                       # 431 tests
 ruff check . && mypy .
 ```
 
@@ -168,17 +168,35 @@ authoritative definition. Every other ordered pair raises
 `InvalidTransitionError`, which the test suite asserts exhaustively across
 all 100 pairs.
 
-```
-defined              ──► queued, waiting
-waiting              ──► queued, blocked_unresolvable
-queued               ──► running, blocked_unresolvable, cancelled
-running              ──► done, failed, timed_out, unknown, cancelled
-failed               ──► queued, waiting, defined
-blocked_unresolvable ──► waiting, queued
-done                 ──► defined
-timed_out            ──► defined
-unknown              ──► defined
-cancelled            ──► defined
+```mermaid
+stateDiagram-v2
+    [*] --> defined
+
+    defined --> queued
+    defined --> waiting
+    waiting --> queued
+    queued --> running
+
+    running --> done
+    running --> failed
+    running --> timed_out
+    running --> unknown
+    running --> cancelled
+    queued --> cancelled
+
+    waiting --> blocked_unresolvable
+    queued --> blocked_unresolvable
+    blocked_unresolvable --> waiting
+    blocked_unresolvable --> queued
+
+    failed --> queued
+    failed --> waiting
+
+    done --> defined
+    failed --> defined
+    timed_out --> defined
+    unknown --> defined
+    cancelled --> defined
 ```
 
 The transitions back to `defined` are how a terminal job becomes runnable
@@ -272,6 +290,54 @@ condition unsatisfiable, not satisfied, so the dependent stays blocked.
 
 ---
 
+## Configuration
+
+Anything that changes per deployment reads from the environment. Everything
+else is a constant in `config.py`, deliberately.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `DAG_SCHEDULER_JOBS_DIR` | `./jobs` | Where definitions are read from |
+| `DAG_SCHEDULER_DB` | `$XDG_DATA_HOME/dag_scheduler/scheduler.db` | Database file |
+| `DAG_SCHEDULER_MAX_CONCURRENT` | `4` | Jobs running at once |
+| `DAG_SCHEDULER_HOST` | `127.0.0.1` | API bind address |
+| `DAG_SCHEDULER_PORT` | `8000` | API port |
+| `DAG_SCHEDULER_TOKEN` | unset | Bearer token required on trigger, cancel and reset |
+| `DAG_SCHEDULER_AGING_INTERVAL` | `60` | Seconds between priority aging passes |
+| `DAG_SCHEDULER_LOG_LEVEL` | `INFO` | Log level |
+| `DAG_SCHEDULER_LOG_JSON` | unset | Emit one JSON object per line |
+| `DAG_SCHEDULER_API_URL` | `http://127.0.0.1:8000` | Where the CLI looks for the daemon |
+
+### Security
+
+The daemon binds loopback by default, so it is not reachable off the
+machine as shipped. Setting `DAG_SCHEDULER_TOKEN` requires
+`Authorization: Bearer <token>` on the three mutating endpoints; reads stay
+open. The daemon logs a warning at startup when it is running
+unauthenticated, and another when bound to a non-loopback address.
+
+That is the whole of it, on purpose. There are no users and no roles,
+because the API is not where the privilege lives. Commands never arrive
+over HTTP: `trigger` only names a job that already exists, and the command
+it runs came from a file on disk. The boundary that matters is write access
+to the jobs directory, because definitions are executed as shell commands
+by the daemon's user.
+
+### Observability
+
+Every log line emitted during a job run carries the job name, run id and
+attempt number, so one filter returns the whole run:
+
+```bash
+DAG_SCHEDULER_LOG_JSON=1 dag-scheduler daemon | jq 'select(.run_id == "...")'
+```
+
+`/metrics` serves Prometheus text: dispatch count, runs by terminal state,
+retries, reload failures, dispatch loop errors, and live gauges for running
+and queued jobs.
+
+---
+
 ## API
 
 Served on `127.0.0.1:8000`.
@@ -284,10 +350,11 @@ Served on `127.0.0.1:8000`.
 | `GET` | `/jobs/{job_id}` | Job detail and last run summary |
 | `GET` | `/jobs/{job_id}/runs` | Run history, newest first |
 | `GET` | `/jobs/{job_id}/runs/{run_id}/logs` | Stdout and stderr for a run |
-| `POST` | `/jobs/{job_id}/trigger` | Force-queue, bypassing dependencies |
-| `POST` | `/jobs/{job_id}/cancel` | Cancel a queued or running job |
-| `POST` | `/jobs/{job_id}/reset` | Return a terminal job to `defined` |
+| `POST` | `/jobs/{job_id}/trigger` | Force-queue, bypassing dependencies. Token required |
+| `POST` | `/jobs/{job_id}/cancel` | Cancel a queued or running job. Token required |
+| `POST` | `/jobs/{job_id}/reset` | Return a terminal job to `defined`. Token required |
 | `GET` | `/stats` | Aggregate stats |
+| `GET` | `/metrics` | Prometheus text exposition |
 
 `/stats` reports durations at one-second resolution, because run timestamps
 are stored to the second. Jobs that finish in under a second report a
@@ -312,6 +379,20 @@ duration of zero.
 ---
 
 ## Example definitions
+
+```mermaid
+flowchart LR
+    subgraph etl["jobs/etl.yaml"]
+        A[extract_data] --> B[transform_data] --> C[load_data]
+    end
+    subgraph maint["jobs/maintenance.toml"]
+        D[cleanup_logs] --> E[archive_old]
+    end
+    C --> D
+```
+
+Job names share one flat namespace, so `cleanup_logs` in a TOML file can
+depend on `load_data` from a YAML file. That is the cross-file edge above.
 
 | File | Demonstrates |
 |---|---|
