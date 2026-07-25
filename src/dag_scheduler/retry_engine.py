@@ -9,6 +9,7 @@ if TYPE_CHECKING:
     from .scheduler import Scheduler
     from .models import JobDefinition, JobRun
 
+from . import metrics
 from .logging_setup import for_run
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class RetryEngine:
 
             # Schedule the retry after backoff. The task is held and its
             # failures reported, rather than being fire-and-forget.
+            metrics.increment("dag_retries_total")
             task = asyncio.create_task(self._retry_after_delay(
                 job_run.job_name, backoff_time, attempt=job_run.attempt + 1
             ))

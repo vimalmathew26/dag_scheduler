@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Set
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
+from . import metrics
 from .config import JOBS_DIR
 
 logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class FileWatcher:
         except asyncio.CancelledError:
             pass
         except Exception as e:
+            metrics.increment("dag_reload_failures_total")
             logger.error(f"Error during registry reload: {e}")
         finally:
             # Clean up the task reference

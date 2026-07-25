@@ -4,6 +4,7 @@ import time
 import uuid
 from typing import Optional, Tuple
 
+from . import metrics
 from .config import (
     GRACEFUL_KILL_TIMEOUT,
     LOG_BATCH_SIZE,
@@ -93,10 +94,12 @@ class Executor:
                         run_id, JobState.CANCELLED, exit_code
                     )
                     log.info(f"Cancelled, exit code {exit_code}")
+                    metrics.increment("dag_runs_total", state=JobState.CANCELLED.value)
                     return
 
                 if timed_out:
                     log.warning(f"Timed out after {definition.timeout}s")
+                    metrics.increment("dag_runs_total", state=JobState.TIMED_OUT.value)
                     await self.persistence.finalize_run(
                         run_id, JobState.TIMED_OUT, exit_code
                     )
@@ -107,6 +110,7 @@ class Executor:
 
                 final_state = JobState.DONE if exit_code == 0 else JobState.FAILED
                 log.info(f"Finished {final_state.value}, exit code {exit_code}")
+                metrics.increment("dag_runs_total", state=final_state.value)
                 end_time = await self.persistence.finalize_run(run_id, final_state, exit_code)
                 job_run.state = final_state
                 job_run.end_time = end_time

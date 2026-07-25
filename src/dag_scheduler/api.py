@@ -6,9 +6,11 @@ from typing import Any, Dict, List, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import PlainTextResponse
 import aiosqlite
 import json
 
+from . import metrics
 from .config import API_TOKEN
 from .models import JobState
 
@@ -328,6 +330,21 @@ async def cancel_job(
     except Exception as e:
         logger.error(f"Error cancelling job: {e}")
         raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.get("/metrics", response_class=PlainTextResponse)
+async def get_metrics(db_path=Depends(_get_db_path)) -> str:
+    """Prometheus text exposition of process counters and queue gauges."""
+    async with aiosqlite.connect(db_path) as db:
+        async with db.execute(
+            "SELECT state, COUNT(*) FROM jobs WHERE state IN (?, ?) GROUP BY state",
+            (JobState.RUNNING.value, JobState.QUEUED.value),
+        ) as cursor:
+            counts = {row[0]: row[1] for row in await cursor.fetchall()}
+
+    metrics.set_gauge("dag_running_jobs", counts.get(JobState.RUNNING.value, 0))
+    metrics.set_gauge("dag_queued_jobs", counts.get(JobState.QUEUED.value, 0))
+    return metrics.render()
 
 
 @app.get("/stats")

@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Set
 
 from .config import MAX_CONCURRENT, PRIORITY_AGING_INTERVAL
 from .models import JobState, JobDefinition
+from . import metrics
 from .dag import get_ready_jobs
 
 logger = logging.getLogger(__name__)
@@ -122,12 +123,14 @@ class Scheduler:
 
                 attempt = await self.persistence.get_job_attempt(job_name)
                 logger.info(f"Dispatching job '{job_name}' (attempt {attempt})")
+                metrics.increment("dag_dispatches_total")
                 self._spawn(
                     self.executor.run_job(job_name, definition, attempt=attempt)
                 )
             except asyncio.CancelledError:
                 break
             except Exception as e:
+                metrics.increment("dag_scheduler_loop_errors_total")
                 logger.error(f"Error in scheduler main loop: {e}")
                 await asyncio.sleep(5)
 
