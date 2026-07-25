@@ -59,7 +59,19 @@ class ProcessManager:
             except Exception as e:
                 logger.error(f"Failed to mark job '{job_name}' as unknown: {e}")
         
-        logger.info(f"Crash recovery completed. Marked {len(unknown_jobs)} jobs as unknown.")
+        # Run rows are reconciled too.  Recovery used to touch only the
+        # jobs table, leaving orphaned runs claiming to be executing
+        # forever and permanently understating the pass rate in /stats.
+        orphaned_runs = await self.persistence.finalize_orphaned_runs()
+        if orphaned_runs:
+            logger.warning(
+                f"Finalized {orphaned_runs} orphaned job run(s) as unknown"
+            )
+
+        logger.info(
+            f"Crash recovery completed. Marked {len(unknown_jobs)} jobs and "
+            f"{orphaned_runs} run(s) as unknown."
+        )
 
     async def terminate(self, process: asyncio.subprocess.Process) -> Optional[int]:
         """Kill a job: SIGTERM the process group, then SIGKILL if needed.

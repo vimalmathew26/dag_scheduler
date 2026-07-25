@@ -363,6 +363,38 @@ class Persistence:
             ) as cursor:
                 return [dict(row) for row in await cursor.fetchall()]
 
+    async def count_runs_in_state(self, state: JobState) -> int:
+        """How many job_runs rows are sitting in a given state."""
+        async with aiosqlite.connect(self.db_path) as db:
+            async with db.execute(
+                "SELECT COUNT(*) FROM job_runs WHERE state = ?", (state.value,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                return int(row[0])
+
+    async def finalize_orphaned_runs(self) -> int:
+        """Close out runs left mid-flight by a previous daemon lifetime.
+
+        A run still marked RUNNING at startup belongs to a process this
+        daemon does not own and cannot reap.  It is finalized as UNKNOWN
+        with a NULL exit code, because nothing observed the process exit.
+
+        Returns the number of rows finalized.
+        """
+        import time
+        end_time = time.strftime('%Y-%m-%d %H:%M:%S')
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute(
+                '''
+                UPDATE job_runs
+                SET state = ?, end_time = ?, exit_code = NULL
+                WHERE state = ?
+                ''',
+                (JobState.UNKNOWN.value, end_time, JobState.RUNNING.value)
+            )
+            await db.commit()
+            return cursor.rowcount
+
     async def record_cancelled_run(self, job_name: str) -> None:
         """Record a cancellation for a job that never started a process.
 

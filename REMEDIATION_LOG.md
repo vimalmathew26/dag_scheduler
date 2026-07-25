@@ -383,6 +383,31 @@ dbq "select count(*) from job_runs where state='running' and end_time is null"
 Job level behaves exactly as documented. Four run rows are left claiming to
 be executing, permanently, with no end time.
 
+### AFTER
+
+```
+### before SIGKILL
+('running',)
+('running', 1)
+### job-level state after recovery (expect unknown)
+('unknown',)
+### run-level rows after recovery (expect none left in 'running')
+('unknown', 1)
+### dangling rows with no end_time
+(0,)
+```
+
+Note the before-state also shows the B1 fix holding: one run row where
+there used to be four.
+
+### Fix
+
+`finalize_orphaned_runs` closes out every run still marked RUNNING at
+startup, setting state UNKNOWN and an end time. The exit code is left NULL
+because nothing observed the process exit, which is the same reasoning that
+gives the job-level UNKNOWN state its meaning. Recovery is idempotent and
+leaves already-finalized runs alone.
+
 ---
 
 ## B11: one duplicate name deletes unrelated pipelines
