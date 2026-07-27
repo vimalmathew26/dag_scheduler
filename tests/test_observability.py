@@ -10,6 +10,7 @@ from dag_scheduler.log_store import LogStore
 from dag_scheduler.logging_setup import JsonFormatter, for_run
 from dag_scheduler.models import JobDefinition, JobState
 from dag_scheduler.process_manager import ProcessManager
+from tests.conftest import requires_posix
 
 
 class TestJsonFormatter:
@@ -75,6 +76,7 @@ class TestRunCorrelation:
 
 
 class TestLogBatching:
+    @requires_posix
     async def test_batched_writes_preserve_order(self, persistence, tmp_path):
         executor = Executor(persistence, ProcessManager(persistence), LogStore(persistence.db_path))
         store = LogStore(persistence.db_path)

@@ -20,6 +20,7 @@ from dag_scheduler.executor import Executor
 from dag_scheduler.log_store import LogStore
 from dag_scheduler.models import JobDefinition, JobState
 from dag_scheduler.process_manager import ProcessManager
+from tests.conftest import requires_posix
 
 
 @pytest.fixture
@@ -28,6 +29,7 @@ def parts(persistence, tmp_path):
     return Executor(persistence, pm, LogStore(tmp_path / "test.db")), pm
 
 
+@requires_posix
 class TestCancelWhileRunning:
     async def test_run_is_recorded_as_cancelled_not_timed_out(self, persistence, parts):
         executor, pm = parts

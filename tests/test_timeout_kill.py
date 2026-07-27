@@ -20,6 +20,7 @@ from dag_scheduler.executor import Executor
 from dag_scheduler.log_store import LogStore
 from dag_scheduler.models import JobDefinition, JobState
 from dag_scheduler.process_manager import ProcessManager
+from tests.conftest import requires_posix
 
 
 def group_members(pgid: int) -> set:
@@ -76,11 +77,13 @@ async def run(executor, persistence, name, command, timeout=2):
 
 
 class TestTimeoutKillsTheProcess:
+    @requires_posix
     async def test_job_is_marked_timed_out(self, executor, persistence):
         await run(executor, persistence, "slow", "sleep 30", timeout=1)
         jobs = await persistence.get_all_db_jobs()
         assert jobs["slow"]["state"] is JobState.TIMED_OUT
 
+    @requires_posix
     async def test_direct_child_is_dead_after_timeout(self, executor, persistence):
         pids = []
 
@@ -120,6 +123,7 @@ class TestTimeoutKillsTheProcess:
             asyncio.create_subprocess_shell = original
         return seen["members"]
 
+    @requires_posix
     async def test_whole_process_group_is_dead_after_timeout(self, executor, persistence):
         """The regression test for the orphans seen in production.
 
@@ -133,6 +137,7 @@ class TestTimeoutKillsTheProcess:
         survivors = {pid for pid in members if alive(pid)}
         assert not survivors, f"orphaned processes survived the timeout: {survivors}"
 
+    @requires_posix
     async def test_process_ignoring_sigterm_is_sigkilled(self, executor, persistence, monkeypatch):
         """Exercises the SIGKILL escalation, which had never executed."""
         monkeypatch.setattr("dag_scheduler.process_manager.GRACEFUL_KILL_TIMEOUT", 1)
@@ -148,6 +153,7 @@ class TestTimeoutKillsTheProcess:
         jobs = await persistence.get_all_db_jobs()
         assert jobs["quick"]["state"] is JobState.DONE
 
+    @requires_posix
     async def test_timed_out_run_records_end_time(self, executor, persistence):
         await run(executor, persistence, "slow", "sleep 30", timeout=1)
         runs = await persistence.get_runs_for_job("slow")

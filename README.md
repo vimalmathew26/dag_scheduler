@@ -13,7 +13,15 @@ deployment story with them. This is the smallest thing that still gives you
 a dependency graph, bounded retries, timeout enforcement and a record of
 what happened: one process, one SQLite file, no broker.
 
-Requires Python 3.11 or newer, for `tomllib`.
+Requires Python 3.11 or newer, for `tomllib`, and a POSIX system: Linux,
+macOS, or WSL on Windows.
+
+The POSIX requirement is not incidental. Jobs are spawned in their own
+process group and killed with `os.killpg`, so that a timeout or a cancel
+takes down the whole job rather than leaving its children orphaned under a
+dead shell. Shutdown installs asyncio signal handlers. Neither has a
+Windows equivalent. Running the test suite on Windows reports 14 skips for
+exactly these behaviours.
 
 ![A terminal session showing a dependency chain executing, a job retrying exactly three times with backoff, and a job being killed on timeout](docs/demo.gif)
 
@@ -79,7 +87,7 @@ old database, either move it or let a new one be created.
 ### Running the tests
 
 ```bash
-pytest                       # 468 tests
+pytest                       # 470 tests, 14 skipped off POSIX
 ruff check . && mypy .
 ```
 

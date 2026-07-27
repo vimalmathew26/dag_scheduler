@@ -9,6 +9,7 @@ from dag_scheduler.executor import Executor
 from dag_scheduler.log_store import LogStore
 from dag_scheduler.models import JobDefinition, JobState
 from dag_scheduler.process_manager import ProcessManager
+from tests.conftest import requires_posix
 
 
 @pytest.fixture
@@ -44,6 +45,7 @@ class TestOutcomes:
         runs = await persistence.get_runs_for_job("j")
         assert runs[0]["exit_code"] == 3
 
+    @requires_posix
     async def test_nonexistent_command_exits_127(self, executor, persistence):
         await run(executor, persistence, "j", "definitely_not_a_command_xyz")
         runs = await persistence.get_runs_for_job("j")
@@ -77,12 +79,14 @@ class TestLogCapture:
         assert "stderr" in streams
         assert any("oops" in chunk for stream, chunk, _ in entries if stream == "stderr")
 
+    @requires_posix
     async def test_both_streams_are_captured(self, executor, persistence, log_store):
         await run(executor, persistence, "j", "echo out; echo err >&2")
         runs = await persistence.get_runs_for_job("j")
         entries = await log_store.get_logs(runs[0]["run_id"])
         assert {stream for stream, _, _ in entries} == {"stdout", "stderr"}
 
+    @requires_posix
     async def test_a_chatty_job_completes(self, executor, persistence, log_store):
         await run(executor, persistence, "j", "for i in $(seq 1 500); do echo line$i; done")
         jobs = await persistence.get_all_db_jobs()
@@ -112,6 +116,7 @@ class TestConcurrency:
         for h in holders:
             await h
 
+    @requires_posix
     async def test_semaphore_limits_parallelism(self, persistence, tmp_path, monkeypatch):
         """With two slots, four one-second jobs take about two seconds."""
         executor = Executor(
